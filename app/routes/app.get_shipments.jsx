@@ -4,11 +4,16 @@ import { authenticate } from "../shopify.server";
 export async function loader({ request }) {
   const { admin } = await authenticate.admin(request);
   
+  const dateNow = new Date();
+  const createdAtMin = new Date(dateNow.setDate(dateNow.getDate() - 15)).toISOString(); // Últimos 15 días
+  const financialStatus = "paid"; // Cambiar según el caso
+  const status = "open"; // Cambiar según el estado deseado
+
   try {
     const response = await admin.graphql(
       `#graphql
-        query GetAllOrders {
-          orders(first: 100) {
+        query GetFilteredOrders {
+          orders(first: 100, query: "created_at:>=${createdAtMin} status:${status} financial_status:${financialStatus}") {
             edges {
               node {
                 id
@@ -87,11 +92,9 @@ export async function loader({ request }) {
     }
 
     const orders = data.data.orders.edges.map(({ node }) => {
-      // Calculamos el total de reembolsos
       const totalRefunded = node.refunds?.reduce((sum, refund) => 
         sum + parseFloat(refund.totalRefundedSet.shopMoney.amount), 0) || 0;
 
-      // Procesamos los line items
       const lineItems = node.lineItems.edges.map(({ node: item }) => ({
         id: item.id,
         quantity: item.quantity,
@@ -113,7 +116,7 @@ export async function loader({ request }) {
       }));
 
       return {
-        order_id: node.name, // Cambiado de orderNumber a name
+        order_id: node.name,
         idWS: node.id,
         date: node.processedAt,
         order_total: parseFloat(node.totalPrice) - totalRefunded,
