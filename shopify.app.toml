@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "74e2e8c014ffbbc5621af4a6731ebddf"
-application_url = "https://audience-wma-decide-thorough.trycloudflare.com"
+application_url = "https://cargo-silicon-switch-endangered.trycloudflare.com"
 embedded = true
 name = "shipeu-order-test"
 handle = "shipeu-order-test"
@@ -23,9 +23,9 @@ scopes = "read_all_orders,read_orders,write_orders,read_products,write_products,
 
 [auth]
 redirect_urls = [
-  "https://audience-wma-decide-thorough.trycloudflare.com/auth/callback",
-  "https://audience-wma-decide-thorough.trycloudflare.com/auth/shopify/callback",
-  "https://audience-wma-decide-thorough.trycloudflare.com/api/auth/callback"
+  "https://cargo-silicon-switch-endangered.trycloudflare.com/auth/callback",
+  "https://cargo-silicon-switch-endangered.trycloudflare.com/auth/shopify/callback",
+  "https://cargo-silicon-switch-endangered.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

@@ -16,10 +16,6 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
-  afterAuth: async ({ shop, accessToken }) => {
-    // Almacenar el token en la base de datos
-    await storeShopToken(shop, accessToken);
-  },
   future: {
     unstable_newEmbeddedAuthStrategy: true,
     removeRest: true,
@@ -28,18 +24,6 @@ const shopify = shopifyApp({
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
 });
-
-async function storeShopToken(shop, accessToken) {
-  try {
-    await prisma.shop.upsert({
-      where: { shopName: shop },
-      update: { accessToken },
-      create: { shopName: shop, accessToken },
-    });
-  } catch (error) {
-    console.error(`Error al guardar el token para la tienda ${shop}:`, error);
-  }
-}
 
 export default shopify;
 export const apiVersion = ApiVersion.October24;

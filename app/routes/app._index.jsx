@@ -1,18 +1,18 @@
-import { Page, Card, EmptyState, Layout, Text } from "@shopify/polaris";
+import { Page, Card, EmptyState, Layout, Text, Button } from "@shopify/polaris";
 
-export default function OrdersIndex() {
+export default function Home() {
   return (
-    <Page title="Shopify Orders">
+    <Page title="Bienvenido a tu App">
       <Layout>
         <Layout.Section>
           <Card>
             <EmptyState
-              heading="No Orders Yet"
-              action={{ content: "Create Order", onAction: () => alert("Create order") }}
+              heading="¡Bienvenido a tu aplicación!"
               image="https://cdn.shopify.com/s/files/1/0070/7032/5992/files/empty_state.svg?301"
             >
-              <Text>
-                Looks like there are no orders to display right now. You can create a new order using the button above.
+              <Text as="p" variant="bodyMd">
+                Esta es la plataforma ideal para gestionar tus pedidos de forma rápida y eficiente. 
+                Explora las opciones y personaliza la experiencia según tus necesidades.
               </Text>
             </EmptyState>
           </Card>

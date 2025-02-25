@@ -1,89 +1,143 @@
 import { json } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
+// Función para verificar la clave API
+async function verificarApiKey(apiKey) {
+  if (!apiKey) return null;
+  
+  const ahora = new Date();
+  
+  // Buscar la sesión con esta clave API que no haya expirado
+  const session = await prisma.session.findFirst({
+    where: {
+      apiKey,
+      apiKeyExpires: {
+        gt: ahora
+      }
+    }
+  });
+  
+  return session;
+}
+
+// Función para obtener órdenes usando la API GraphQL de Shopify
+async function obtenerOrdenes(accessToken, shop, financialStatus = "any", status = "any") {
+  const shopifyDomain = `https://${shop}`;
+  const url = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
   
   const dateNow = new Date();
   const createdAtMin = new Date(dateNow.setDate(dateNow.getDate() - 15)).toISOString(); // Últimos 15 días
-  const financialStatus = "paid"; // Cambiar según el caso
-  const status = "open"; // Cambiar según el estado deseado
-
-  try {
-    const response = await admin.graphql(
-      `#graphql
-        query GetFilteredOrders {
-          orders(first: 100, query: "created_at:>=${createdAtMin} status:${status} financial_status:${financialStatus}") {
-            edges {
-              node {
-                id
-                name
-                processedAt
-                totalPrice
-                email
-                currencyCode
-                paymentGatewayNames
-                subtotalLineItemsQuantity
-                lineItems(first: 50) {
-                  edges {
-                    node {
+  
+  const query = `#graphql
+    query GetFilteredOrders {
+      orders(first: 100, query: "created_at:>=${createdAtMin} status:${status} financial_status:${financialStatus}") {
+        edges {
+          node {
+            id
+            name
+            processedAt
+            totalPrice
+            email
+            currencyCode
+            paymentGatewayNames
+            subtotalLineItemsQuantity
+            lineItems(first: 50) {
+              edges {
+                node {
+                  id
+                  quantity
+                  name
+                  originalUnitPrice
+                  discountedUnitPrice
+                  variant {
+                    id
+                    sku
+                    price
+                    product {
                       id
-                      quantity
-                      name
-                      originalUnitPrice
-                      discountedUnitPrice
-                      variant {
-                        id
-                        sku
-                        price
-                        product {
-                          id
-                          title
-                          handle
-                        }
-                      }
-                    }
-                  }
-                }
-                billingAddress {
-                  phone
-                }
-                shippingAddress {
-                  firstName
-                  lastName
-                  address1
-                  address2
-                  zip
-                  city
-                  province
-                  company
-                  country
-                  phone
-                }
-                refunds {
-                  totalRefundedSet {
-                    shopMoney {
-                      amount
+                      title
+                      handle
                     }
                   }
                 }
               }
             }
+            billingAddress {
+              phone
+            }
+            shippingAddress {
+              firstName
+              lastName
+              address1
+              address2
+              zip
+              city
+              province
+              company
+              country
+              phone
+            }
+            refunds {
+              totalRefundedSet {
+                shopMoney {
+                  amount
+                }
+              }
+            }
           }
-        }`
-    );
-
-    console.log("Respuesta completa:", JSON.stringify(response, null, 2));
-
-    if (!response.ok) {
-      console.error("Error en la respuesta de la API");
-      return json({ success: false, error: "Error en la respuesta de la API" }, { status: response.status });
-    }
-
-    const data = await response.json();
+        }
+      }
+    }`;
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': accessToken
+      },
+      body: JSON.stringify({ query })
+    });
     
+    if (!response.ok) {
+      throw new Error(`Error en la respuesta de Shopify: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error("Error al obtener órdenes de Shopify:", error);
+    throw error;
+  }
+}
+
+export async function loader({ request }) {
+  const url = new URL(request.url);
+  const apiKey = url.searchParams.get('api_key') || 
+  request.headers.get('X-API-Key') || 
+  request.headers.get('Authorization')?.replace("Bearer ", "");
+
+  const financialStatus = url.searchParams.get('financial_status') || 'any';
+  const status = url.searchParams.get('status') || 'any';
+
+  
+  if (!apiKey) {
+    return json({ error: 'Se requiere clave API' }, { status: 401 });
+  }
+  
+  try {
+    // Verificar la clave API y obtener la sesión asociada
+    const session = await verificarApiKey(apiKey);
+    
+    if (!session) {
+      return json({ error: 'Clave API inválida o expirada' }, { status: 401 });
+    }
+    
+    // Obtener las órdenes usando las credenciales de la sesión
+    const data = await obtenerOrdenes(session.accessToken, session.shop, financialStatus, status);
+    
+    // Procesar y formatear las órdenes como lo hacías originalmente
     if (!data.data?.orders?.edges?.length) {
-      console.log("No se encontraron órdenes. Data recibida:", data);
       return json({ 
         success: false, 
         error: "No se encontraron órdenes",
@@ -137,15 +191,14 @@ export async function loader({ request }) {
         line_items: lineItems
       };
     });
-
+    
     return json({ success: true, orders });
     
   } catch (error) {
-    console.error("Error detallado:", error);
+    console.error("Error al procesar solicitud:", error);
     return json({ 
       success: false, 
-      error: error.message,
-      stack: error.stack 
+      error: error.message
     }, { status: 500 });
   }
 }

@@ -13,6 +13,7 @@ datasource db {
   url      = "file:dev.sqlite"
 }
 
+
 model Session {
   id            String    @id
   shop          String
@@ -29,41 +30,8 @@ model Session {
   locale        String?
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
-}
-
-model Shipment {
-  id                  String   @id @default(cuid())
-  orderId             String
-  orderNumber         String
-  date                DateTime
-  orderTotal          Float
-  orderCurrency       String
-  billingEmail        String
-  billingPhone        String
-  shippingFirstName   String
-  shippingLastName    String
-  shippingAddress1    String
-  shippingAddress2    String
-  shippingPostcode    String
-  shippingCity        String
-  shippingState       String
-  shippingCompany     String
-  shippingCountry     String
-  paymentMethod       String
-  dateCreated         DateTime
-  status              String
-  assignedLocationId  String?
-  shippingTotal       Float
-  shippingMethod      String
-  cod                 Float?
-  lineItems           LineItem[]
-}
-
-model LineItem {
-  id         String   @id @default(cuid())
-  productId  String
-  quantity   Int
-  price      Float
-  shipmentId String
-  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  apiKey        String?
+  apiKeyExpires DateTime?
+  
+  @@unique([shop, apiKey])
 }

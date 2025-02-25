@@ -1,15 +1,77 @@
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
-export async function loader({ request }) {
-  const { admin } = await authenticate.admin(request);
-  const orderId = "6194758418632"; // El ID proporcionado
-  const orderGid = `gid://shopify/Order/${orderId}`;
-  const NEW_LOCATION_ID = "gid://shopify/Location/74597728456"; // ID de la nueva ubicación
-  const trackingNumber = "TRACK123456789"; // Número de seguimiento
-  const trackingUrl = `https://tracking.example.com/${trackingNumber}`; // URL del tracking
+// Función para verificar la clave API
+async function verificarApiKey(apiKey) {
+  if (!apiKey) return null;
+  
+  const ahora = new Date();
+  
+  // Buscar la sesión con esta clave API que no haya expirado
+  const session = await prisma.session.findFirst({
+    where: {
+      apiKey,
+      apiKeyExpires: {
+        gt: ahora
+      }
+    }
+  });
+  
+  return session;
+}
 
+export async function action({ request }) {
+  // Verificar API key
+  const url = new URL(request.url);
+  const apiKey = url.searchParams.get('api_key') || 
+                request.headers.get('X-API-Key') || 
+                request.headers.get('Authorization')?.replace("Bearer ", "");
+
+  if (!apiKey) {
+    return json({ error: 'Se requiere clave API' }, { status: 401 });
+  }
+  
   try {
+    // Verificar la clave API y obtener la sesión asociada
+    const session = await verificarApiKey(apiKey);
+    
+    if (!session) {
+      return json({ error: 'Clave API inválida o expirada' }, { status: 401 });
+    }
+
+    const { orderId, locationId, trackingNumber, trackingUrl } = await request.json();
+    
+    if (!orderId || !locationId || !trackingNumber || !trackingUrl) {
+      return json({ error: "Faltan parámetros requeridos" }, { status: 400 });
+    }
+
+    // Autenticar con admin usando las credenciales de la sesión
+    const admin = {
+      graphql: async (query, options = {}) => {
+        const shopifyDomain = `https://${session.shop}`;
+        const url = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
+        
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': session.accessToken
+          },
+          body: JSON.stringify({ 
+            query,
+            variables: options.variables
+          })
+        });
+
+        return response;
+      }
+    };
+
+    // A partir de aquí, es tu código original
+    const orderGid = `gid://shopify/Order/${orderId}`;
+    const location = `gid://shopify/Location/${locationId}`; // ID de la nueva ubicación
+
     // 1. Obtener la orden por su ID
     const response = await admin.graphql(
       `#graphql
@@ -64,7 +126,11 @@ export async function loader({ request }) {
             }
           }
         }`,
-      { id: orderGid }
+        {
+          variables: {
+            "id": orderGid,
+          },
+        }
     );
 
     const responseJson = await response.json();
@@ -104,23 +170,24 @@ export async function loader({ request }) {
     }
 
     // 2. Mover la orden si es necesario
-    if (fulfillmentOrder.assignedLocation?.location?.id !== NEW_LOCATION_ID) {
+    if (fulfillmentOrder.assignedLocation?.location?.id !== location) {
       const moveResponse = await admin.graphql(
-        `mutation MoveFulfillmentOrder {
-          fulfillmentOrderMove(
-            fulfillmentOrderId: "${fulfillmentOrder.id}",
-            newLocationId: "${NEW_LOCATION_ID}"
-          ) {
-            movedFulfillmentOrder {
-              id
-            }
-            userErrors {
-              field
-              message
+        `#graphql
+          mutation MoveFulfillmentOrder($id: ID!, $newLocationId: ID!) {
+            fulfillmentOrderMove(id: $id, newLocationId: $newLocationId) {
+              movedFulfillmentOrder {
+                id
+              }
+              userErrors {
+                field
+                message
+              }
             }
           }
-        }`
+        `,
+        { variables: { id: fulfillmentOrder.id, newLocationId: location } }
       );
+      
 
       const moveResult = await moveResponse.json();
       if (moveResult.errors || moveResult.data?.fulfillmentOrderMove?.userErrors?.length > 0) {
