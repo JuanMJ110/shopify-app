@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "74e2e8c014ffbbc5621af4a6731ebddf"
-application_url = "https://capture-adelaide-dealers-differences.trycloudflare.com"
+application_url = "https://interest-engine-technique-yamaha.trycloudflare.com"
 embedded = true
 name = "shipeu-order-test"
 handle = "shipeu-order-test"
@@ -23,9 +23,9 @@ scopes = "read_all_orders,read_orders,write_orders,read_products,write_products,
 
 [auth]
 redirect_urls = [
-  "https://capture-adelaide-dealers-differences.trycloudflare.com/auth/callback",
-  "https://capture-adelaide-dealers-differences.trycloudflare.com/auth/shopify/callback",
-  "https://capture-adelaide-dealers-differences.trycloudflare.com/api/auth/callback"
+  "https://interest-engine-technique-yamaha.trycloudflare.com/auth/callback",
+  "https://interest-engine-technique-yamaha.trycloudflare.com/auth/shopify/callback",
+  "https://interest-engine-technique-yamaha.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

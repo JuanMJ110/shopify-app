@@ -92,6 +92,28 @@ query GetFilteredOrders {
             }
           }
         }
+        fulfillmentOrders(first: 100) {
+          edges {
+            node {
+              id
+              status
+              assignedLocation {
+                name
+                location {
+                  id
+                }
+              }
+            }
+          }
+        }
+        shippingLines(first: 100) {
+          edges {
+            node {
+              title
+              price
+            }
+          }
+        }
       }
     }
   }
@@ -155,7 +177,7 @@ export async function loader({ request }) {
       const totalRefunded = node.refunds?.reduce((sum, refund) =>
         sum + parseFloat(refund.totalRefundedSet?.shopMoney?.amount || 0), 0
       ) || 0;
-    
+
       // Crear un mapa con las cantidades reembolsadas de cada producto
       const refundedItemQuantities = new Map();
       node.refunds?.forEach(refund => {
@@ -164,15 +186,15 @@ export async function loader({ request }) {
           refundedItemQuantities.set(itemId, (refundedItemQuantities.get(itemId) || 0) + 1);
         });
       });
-    
+
       // Ajustar las cantidades en lugar de eliminar los productos
       const lineItems = node.lineItems.edges
         .map(({ node: item }) => {
           const refundedQty = refundedItemQuantities.get(item.id) || 0;
           const remainingQty = item.quantity - refundedQty;
-          
+
           if (remainingQty <= 0) return null; // Solo excluir si se reembolsaron todas las unidades
-    
+
           return {
             total: parseFloat(item.originalUnitPrice) * remainingQty,
             price: parseFloat(item.originalUnitPrice),
@@ -182,7 +204,15 @@ export async function loader({ request }) {
           };
         })
         .filter(Boolean); // Eliminar los nulls de los productos completamente reembolsados
-    
+
+      const lastFulfillmentOrder = node.fulfillmentOrders?.edges.slice(-1)[0]?.node;
+
+      // Extraer la información de los métodos de envío
+      const shippingLines = node.shippingLines.edges.map(({ node: shipping }) => ({
+        title: shipping.title,
+        price: parseFloat(shipping.price) || 0
+      }));
+
       return {
         order_id: node.name,
         idWS: node.id,
@@ -206,10 +236,11 @@ export async function loader({ request }) {
         payment_method: node.paymentGatewayNames?.[0] || "",
         date_created: node.processedAt,
         line_items: lineItems,
-        fulfillment_status: node.displayFulfillmentStatus
+        shipping_lines: shippingLines,
+        fulfillment_location_id: lastFulfillmentOrder?.assignedLocation?.location?.id || null,
       };
     });
-    
+
 
     return json({ success: true, orders });
 
