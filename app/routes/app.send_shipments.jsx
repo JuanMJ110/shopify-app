@@ -6,15 +6,10 @@ import prisma from "../db.server";
 async function verificarApiKey(apiKey) {
   if (!apiKey) return null;
   
-  const ahora = new Date();
-  
-  // Buscar la sesión con esta clave API que no haya expirado
   const session = await prisma.session.findFirst({
     where: {
       apiKey,
-      apiKeyExpires: {
-        gt: ahora
-      }
+      // shipeuStatus: "active"
     }
   });
   

@@ -15,10 +15,10 @@ datasource db {
 
 
 model Session {
-  id            String    @id
+  id            String    @id @default(cuid())
   shop          String
   state         String
-  isOnline      Boolean   @default(false)
+  isOnline      Boolean   @default(true)
   scope         String?
   expires       DateTime?
   accessToken   String
@@ -30,8 +30,10 @@ model Session {
   locale        String?
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
-  apiKey        String?
-  apiKeyExpires DateTime?
+  apiKey        String?   @unique
+  shipeuStatus  String?   @default("pending")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   
   @@unique([shop, apiKey])
 }

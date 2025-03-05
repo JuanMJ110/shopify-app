@@ -4,14 +4,10 @@ import prisma from "../db.server";
 async function verificarApiKey(apiKey) {
   if (!apiKey) return null;
 
-  const ahora = new Date();
-
   const session = await prisma.session.findFirst({
     where: {
       apiKey,
-      apiKeyExpires: {
-        gt: ahora
-      }
+      // shipeuStatus: "active"
     }
   });
 
@@ -26,99 +22,99 @@ async function obtenerOrdenes(accessToken, shop, financialStatus = "any", status
   const createdAtMin = new Date(dateNow.setDate(dateNow.getDate() - 15)).toISOString();
 
   const query = `#graphql
-query GetFilteredOrders {
-  orders(first: 250, query: "created_at:>=${createdAtMin} status:${status} financial_status:${financialStatus}") {
-    edges {
-      node {
-        id
-        name
-        processedAt
-        totalPrice
-        currencyCode
-        email
-        displayFinancialStatus
-        displayFulfillmentStatus
-        paymentGatewayNames
-        subtotalLineItemsQuantity
-        lineItems(first: 50) {
-          edges {
-            node {
-              id
-              quantity
-              name
-              originalUnitPrice
-              discountedUnitPrice
-              variant {
-                id
-                sku
-                price
-                product {
-                  id
-                  title
-                  handle
-                }
-              }
-            }
-          }
-        }
-        billingAddress {
-          phone
-        }
-        shippingAddress {
-          firstName
-          lastName
-          address1
-          address2
-          zip
-          city
-          province
-          company
-          country
-          phone
-        }
-        refunds {
-          totalRefundedSet {
-            shopMoney {
-              amount
-            }
-          }
-          refundLineItems(first: 50) { 
+  query GetFilteredOrders {
+    orders(first: 250, query: "created_at:>=${createdAtMin} status:${status} financial_status:${financialStatus}") {
+      edges {
+        node {
+          id
+          name
+          processedAt
+          totalPrice
+          currencyCode
+          email
+          displayFinancialStatus
+          displayFulfillmentStatus
+          paymentGatewayNames
+          subtotalLineItemsQuantity
+          lineItems(first: 50) {
             edges {
               node {
-                lineItem {
-                  id
-                }
-              }
-            }
-          }
-        }
-        fulfillmentOrders(first: 100) {
-          edges {
-            node {
-              id
-              status
-              assignedLocation {
+                id
+                quantity
                 name
-                location {
+                originalUnitPrice
+                discountedUnitPrice
+                variant {
                   id
+                  sku
+                  price
+                  product {
+                    id
+                    title
+                    handle
+                  }
                 }
               }
             }
           }
-        }
-        shippingLines(first: 100) {
-          edges {
-            node {
-              title
-              price
+          billingAddress {
+            phone
+          }
+          shippingAddress {
+            firstName
+            lastName
+            address1
+            address2
+            zip
+            city
+            province
+            company
+            country
+            phone
+          }
+          refunds {
+            totalRefundedSet {
+              shopMoney {
+                amount
+              }
+            }
+            refundLineItems(first: 50) { 
+              edges {
+                node {
+                  lineItem {
+                    id
+                  }
+                }
+              }
+            }
+          }
+          fulfillmentOrders(first: 100) {
+            edges {
+              node {
+                id
+                status
+                assignedLocation {
+                  name
+                  location {
+                    id
+                  }
+                }
+              }
+            }
+          }
+          shippingLines(first: 100) {
+            edges {
+              node {
+                title
+                price
+              }
             }
           }
         }
       }
     }
   }
-}
-`;
+  `;
 
   try {
     const response = await fetch(url, {
