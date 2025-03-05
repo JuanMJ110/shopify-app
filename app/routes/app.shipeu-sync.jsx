@@ -540,8 +540,8 @@ export default function ShipeuSync() {
                   <Text color="subdued" as="p" variant="bodyMd">
                     Si ya tienes una cuenta en Shipeu, sincroniza tu tienda para comenzar a usar nuestros servicios.
                   </Text>
-                  <div style={{ marginTop: '1rem' }}>
-                    <Button onClick={handleSyncExisting} primary fullWidth>
+                  <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
+                    <Button onClick={handleSyncExisting} primary size="medium">
                       Ya soy cliente - Sincronizar tienda
                     </Button>
                   </div>
@@ -552,8 +552,8 @@ export default function ShipeuSync() {
                     <Text color="subdued" as="p" variant="bodyMd">
                       Regístrate en Shipeu para acceder a nuestros servicios de envío y gestión logística.
                     </Text>
-                    <div style={{ marginTop: '1rem' }}>
-                      <Button onClick={() => setShowRegistrationForm(true)} fullWidth>
+                    <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
+                      <Button onClick={() => setShowRegistrationForm(true)} size="medium">
                         Registrarme en Shipeu
                       </Button>
                     </div>
