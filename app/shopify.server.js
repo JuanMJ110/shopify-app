@@ -16,6 +16,30 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  isEmbeddedApp: true,
+  hooks: {
+    afterAuth: async ({ session }) => {
+      // Verificar si ya existe una sesión activa para esta tienda
+      const existingSession = await prisma.session.findFirst({
+        where: {
+          shop: session.shop,
+        },
+      });
+
+      if (existingSession) {
+        // Actualizar la sesión existente
+        await prisma.session.update({
+          where: { id: existingSession.id },
+          data: {
+            accessToken: session.accessToken,
+            expires: session.expires,
+            scope: session.scope,
+            state: session.state,
+          },
+        });
+      }
+    },
+  },
   future: {
     unstable_newEmbeddedAuthStrategy: true,
     removeRest: true,

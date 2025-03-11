@@ -20,133 +20,142 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { useEffect, useState } from "react";
 import { ViewIcon, HideIcon, ClipboardIcon } from "@shopify/polaris-icons";
-import { randomUUID } from "crypto";
+import { regenerateApiKey, registerStore, syncStore } from "../shipeu.server";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
+
+  if (!session) {
+    throw await authenticate.error(request);
+  }
+
   const existingSession = await prisma.session.findFirst({
     where: {
       shop: session.shop,
-      shipeuStatus: "active",
     },
   });
 
   return json({
-    isConfigured: !!existingSession,
+    shop: session.shop,
+    isConfigured: existingSession?.shipeuStatus === "active",
     apiKey: existingSession?.apiKey || null,
   });
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+
+  if (!session) {
+    throw await authenticate.error(request);
+  }
+
   const formData = await request.formData();
-  const action = formData.get("action");
+  const intent = formData.get("intent");
 
-  if (action === "generate_api_key") {
-    const apiKey = randomUUID();
-    await prisma.session.update({
-      where: { id: session.id },
-      data: {
-        apiKey,
-        shipeuStatus: "active",
-      },
-    });
-    return json({ success: true, apiKey });
+  const existingSession = await prisma.session.findFirst({
+    where: {
+      shop: session.shop,
+    },
+  });
+
+  if (!existingSession) {
+    return json({ 
+      success: false, 
+      error: "Sesión no válida. Por favor, vuelve a autenticarte." 
+    }, { status: 401 });
   }
 
-  if (action === "sync_store") {
-    try {
-      const storeName = formData.get("storeName");
-      const storeEmail = formData.get("storeEmail");
-      const storePhone = formData.get("storePhone");
-      const storeAddress = formData.get("storeAddress");
+  switch (intent) {
+    case "regenerate_api_key": {
+      try {
+        const { apiKey } = await regenerateApiKey(session.accessToken);
 
-      if (!storeName || !storeEmail || !storePhone || !storeAddress) {
+        await prisma.session.update({
+          where: { id: existingSession.id },
+          data: {
+            apiKey,
+            shipeuStatus: "active",
+          },
+        });
+
+        return json({ success: true, apiKey });
+      } catch (error) {
+        console.error("Error regenerando API key:", error);
         return json({ 
           success: false, 
-          error: "Todos los campos son requeridos" 
-        }, { status: 400 });
+          error: "Error al regenerar la API Key. Por favor, intenta nuevamente." 
+        }, { status: 500 });
       }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(storeEmail)) {
-        return json({ 
-          success: false, 
-          error: "El email no es válido" 
-        }, { status: 400 });
-      }
-
-      const apiKey = randomUUID();
-      await prisma.session.update({
-        where: { id: session.id },
-        data: {
-          apiKey,
-          shipeuStatus: "active",
-        },
-      });
-
-      return json({ 
-        success: true, 
-        message: "Tienda sincronizada exitosamente",
-        apiKey 
-      });
-    } catch (error) {
-      console.error("Error al sincronizar tienda:", error);
-      return json({ 
-        success: false, 
-        error: "Error al sincronizar la tienda: " + error.message 
-      }, { status: 500 });
     }
-  }
 
-  if (action === "sync_existing_store") {
-    try {
-      const apiKey = formData.get("apiKey");
-      const email = formData.get("email");
+    case "register_new_store": {
+      try {
+        const formFields = Object.fromEntries(formData);
+        const { apiKey, status } = await registerStore({
+          ...formFields,
+          shop: session.shop,
+          accessToken: session.accessToken,
+        });
 
-      if (!apiKey || !email) {
+        await prisma.session.update({
+          where: { id: existingSession.id },
+          data: {
+            apiKey,
+            shipeuStatus: status,
+            email: formFields.email,
+          },
+        });
+
+        return json({ 
+          success: true, 
+          message: "Tienda registrada exitosamente",
+          apiKey 
+        });
+      } catch (error) {
+        console.error("Error al registrar tienda:", error);
         return json({ 
           success: false, 
-          error: "API Key y email son requeridos" 
-        }, { status: 400 });
+          error: error.message || "Error al registrar la tienda. Por favor, verifica los datos e intenta nuevamente."
+        }, { status: 500 });
       }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return json({ 
-          success: false, 
-          error: "El email no es válido" 
-        }, { status: 400 });
-      }
-
-      // Aquí iría la validación con la API de Shipeu
-      // const response = await validateShipeuCredentials(apiKey, email);
-      
-      // Por ahora, simulamos una respuesta exitosa
-      await prisma.session.update({
-        where: { id: session.id },
-        data: {
-          apiKey,
-          shipeuStatus: "active",
-          shipeuEmail: email
-        },
-      });
-
-      return json({ 
-        success: true, 
-        message: "Tienda sincronizada exitosamente",
-        apiKey 
-      });
-    } catch (error) {
-      console.error("Error al sincronizar tienda:", error);
-      return json({ 
-        success: false, 
-        error: "Error al sincronizar la tienda: " + error.message 
-      }, { status: 500 });
     }
-  }
 
-  return json({ success: false, error: "Acción no válida" });
+    case "sync_existing_store": {
+      try {
+        const { apiKey, email } = Object.fromEntries(formData);
+        const { status } = await syncStore({ 
+          apiKey, 
+          email,
+          shop: session.shop,
+          accessToken: session.accessToken 
+        });
+        
+        await prisma.session.update({
+          where: { id: existingSession.id },
+          data: {
+            apiKey,
+            shipeuStatus: status,
+            email,
+          },
+        });
+
+        return json({ 
+          success: true, 
+          message: "Tienda sincronizada exitosamente",
+          apiKey 
+        });
+      } catch (error) {
+        console.error("Error al sincronizar tienda:", error);
+        return json({ 
+          success: false, 
+          error: error.message || "Error al sincronizar la tienda. Por favor, verifica tus credenciales."
+        }, { status: 500 });
+      }
+    }
+
+    default:
+      return json({ success: false, error: "Acción no válida" }, { status: 400 });
+  }
 };
 
 export default function ShipeuSync() {
@@ -163,8 +172,8 @@ export default function ShipeuSync() {
   const [errorMessage, setErrorMessage] = useState("");
   const [formData, setFormData] = useState({
     storeName: "",
-    storeEmail: "",
-    storePhone: "",
+    email: "",
+    phone1: "",
     storeAddress: "",
     contact: "",
     company: "",
@@ -172,10 +181,7 @@ export default function ShipeuSync() {
     state: "",
     city: "",
     postalCode: "",
-    address: "",
-    phone1: "",
     phone2: "",
-    email: "",
     cif: "",
   });
   const [syncFormData, setSyncFormData] = useState({
@@ -205,8 +211,8 @@ export default function ShipeuSync() {
     if (actionData?.success && actionData?.apiKey) {
       setFormData({
         storeName: "",
-        storeEmail: "",
-        storePhone: "",
+        email: "",
+        phone1: "",
         storeAddress: "",
         contact: "",
         company: "",
@@ -214,10 +220,7 @@ export default function ShipeuSync() {
         state: "",
         city: "",
         postalCode: "",
-        address: "",
-        phone1: "",
         phone2: "",
-        email: "",
         cif: "",
       });
     }
@@ -230,10 +233,12 @@ export default function ShipeuSync() {
   }
 
   function handleGenerateApiKey() {
-    setShowApiKey(false);
-    submit({ action: "generate_api_key" }, { method: "post" });
-    setToastMessage("Generando nueva API Key...");
-    setToastActive(true);
+    if (confirm("¿Estás seguro de que deseas regenerar la API Key? La API Key anterior dejará de funcionar.")) {
+      setShowApiKey(false);
+      submit({ intent: "regenerate_api_key" }, { method: "post" });
+      setToastMessage("Solicitando nueva API Key...");
+      setToastActive(true);
+    }
   }
 
   function handleCopyApiKey() {
@@ -252,7 +257,10 @@ export default function ShipeuSync() {
 
   function handleSubmit(e) {
     e.preventDefault();
-    submit({ ...formData, action: "sync_store" }, { method: "post" });
+    submit({ 
+      ...formData, 
+      intent: "register_new_store"
+    }, { method: "post" });
   }
 
   const handleSyncExisting = () => {
@@ -263,7 +271,7 @@ export default function ShipeuSync() {
     e.preventDefault();
     submit({ 
       ...syncFormData, 
-      action: "sync_existing_store" 
+      intent: "sync_existing_store"
     }, { method: "post" });
   };
 
@@ -380,6 +388,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("storeName")}
                           autoComplete="off"
                           required
+                          helpText="Nombre legal de tu empresa"
                         />
                         <TextField
                           label="CIF"
@@ -387,6 +396,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("cif")}
                           autoComplete="off"
                           required
+                          helpText="CIF de tu empresa"
                         />
                       </FormLayout.Group>
 
@@ -397,6 +407,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("contact")}
                           autoComplete="off"
                           required
+                          helpText="Nombre de la persona de contacto"
                         />
                         <TextField
                           label="Email"
@@ -405,6 +416,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("email")}
                           autoComplete="off"
                           required
+                          helpText="Email principal de contacto"
                         />
                       </FormLayout.Group>
 
@@ -416,6 +428,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("phone1")}
                           autoComplete="off"
                           required
+                          helpText="Teléfono principal de contacto"
                         />
                         <TextField
                           label="Teléfono secundario"
@@ -423,6 +436,7 @@ export default function ShipeuSync() {
                           value={formData.phone2}
                           onChange={handleInputChange("phone2")}
                           autoComplete="off"
+                          helpText="Teléfono secundario (opcional)"
                         />
                       </FormLayout.Group>
 
@@ -437,6 +451,7 @@ export default function ShipeuSync() {
                             value={formData.country}
                             onChange={handleInputChange("country")}
                             required
+                            helpText="País donde está ubicada tu empresa"
                           />
                         </div>
                         <div style={{ flex: '1' }}>
@@ -446,6 +461,7 @@ export default function ShipeuSync() {
                             onChange={handleInputChange("state")}
                             autoComplete="off"
                             required
+                            helpText="Provincia donde está ubicada tu empresa"
                           />
                         </div>
                       </FormLayout.Group>
@@ -457,6 +473,7 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("city")}
                           autoComplete="off"
                           required
+                          helpText="Ciudad donde está ubicada tu empresa"
                         />
                         <TextField
                           label="Código postal"
@@ -465,16 +482,18 @@ export default function ShipeuSync() {
                           type="text"
                           autoComplete="off"
                           required
+                          helpText="Código postal de tu dirección"
                         />
                       </FormLayout.Group>
 
                       <TextField
                         label="Dirección"
-                        value={formData.address}
-                        onChange={handleInputChange("address")}
+                        value={formData.storeAddress}
+                        onChange={handleInputChange("storeAddress")}
                         multiline={2}
                         autoComplete="off"
                         required
+                        helpText="Dirección completa de tu empresa"
                       />
 
                       <div style={{ 
