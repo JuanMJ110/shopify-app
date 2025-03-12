@@ -107,22 +107,21 @@ export default function Index() {
   return (
     <Page title="Bienvenido a Shipeu" fullWidth>
       <BlockStack gap="500" padding="500">
-        {needsConfiguration && (
-          <Layout.Section>
-            <Banner
-              title="Configuración pendiente"
-              status="warning"
-              action={{
-                content: "Configurar ahora",
-                onAction: () => navigate("/app/shipeu-sync")
-              }}
-            >
-              <p>Para comenzar a disfrutar de todos los beneficios de Shipeu, necesitas completar la configuración de tu tienda.</p>
-            </Banner>
-          </Layout.Section>
-        )}
-
         <Layout>
+          {needsConfiguration && (
+            <Layout.Section>
+              <Banner
+                title="Configuración pendiente"
+                status="warning"
+                action={{
+                  content: "Configurar ahora",
+                  onAction: () => navigate("/app/shipeu-sync")
+                }}
+              >
+                <p>Para comenzar a disfrutar de todos los beneficios de Shipeu, necesitas completar la configuración de tu tienda.</p>
+              </Banner>
+            </Layout.Section>
+          )}
           <Layout.Section>
             <Card roundedAbove="xl">
               <Box padding="500">
@@ -163,7 +162,7 @@ export default function Index() {
                     <Text as="h3" variant="headingLg" alignment="center">
                       Características principales
                     </Text>
-                    
+
                     <div style={{
                       display: 'grid',
                       gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',

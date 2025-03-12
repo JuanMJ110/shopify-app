@@ -68,7 +68,7 @@ export const action = async ({ request }) => {
   switch (intent) {
     case "regenerate_api_key": {
       try {
-        const { apiKey } = await regenerateApiKey(session.accessToken);
+        const { apiKey } = await regenerateApiKey(session.apiKey);
 
         await prisma.session.update({
           where: { id: existingSession.id },
@@ -91,10 +91,8 @@ export const action = async ({ request }) => {
     case "register_new_store": {
       try {
         const formFields = Object.fromEntries(formData);
-        const { apiKey, status } = await registerStore({
-          ...formFields,
-          shop: session.shop,
-          accessToken: session.accessToken,
+        const { apiKey, status, shipeuId } = await registerStore({
+          ...formFields
         });
 
         await prisma.session.update({
@@ -102,6 +100,7 @@ export const action = async ({ request }) => {
           data: {
             apiKey,
             shipeuStatus: status,
+            shipeuId,
             email: formFields.email,
           },
         });
@@ -109,7 +108,11 @@ export const action = async ({ request }) => {
         return json({ 
           success: true, 
           message: "Tienda registrada exitosamente",
-          apiKey 
+          data: {
+            apiKey,
+            status,
+            storeId: shipeuId
+          }
         });
       } catch (error) {
         console.error("Error al registrar tienda:", error);
@@ -123,18 +126,16 @@ export const action = async ({ request }) => {
     case "sync_existing_store": {
       try {
         const { apiKey, email } = Object.fromEntries(formData);
-        const { status } = await syncStore({ 
-          apiKey, 
-          email,
-          shop: session.shop,
-          accessToken: session.accessToken 
+        const { status, shipeuId, apiKey: newApiKey } = await syncStore({ 
+          email
         });
         
         await prisma.session.update({
           where: { id: existingSession.id },
           data: {
-            apiKey,
+            apiKey: newApiKey,
             shipeuStatus: status,
+            shipeuId,
             email,
           },
         });
@@ -142,7 +143,11 @@ export const action = async ({ request }) => {
         return json({ 
           success: true, 
           message: "Tienda sincronizada exitosamente",
-          apiKey 
+          data: {
+            apiKey: newApiKey,
+            status,
+            storeId: shipeuId
+          }
         });
       } catch (error) {
         console.error("Error al sincronizar tienda:", error);

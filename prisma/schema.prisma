@@ -32,6 +32,7 @@ model Session {
   emailVerified Boolean?  @default(false)
   apiKey        String?   @unique
   shipeuStatus  String?   @default("pending")
+  shipeuId      String?   
   lastSync      DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

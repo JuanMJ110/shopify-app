@@ -3,100 +3,117 @@
  * Descomentar y configurar cuando se tenga acceso a la API real
  */
 
-// const SHIPEU_CONFIG = {
-//   API_URL: "https://api.shipeu.com",
-//   API_VERSION: "v1",
-//   APP_KEY: process.env.SHIPEU_APP_KEY, // Añadir en .env
-//   TIMEOUT: 30000
-// };
+const SHIPEU_CONFIG = {
+  API_URL: "http://localhost/shipeu/public/api/shopify",
+  SHIPEU_API_KEY: "08afb311-1009-45a9-923e-0c032a4676e2", // API key general para todas las peticiones
+  TIMEOUT: 30000
+};
 
 /**
  * IMPLEMENTACIÓN REAL DE LA API DE SHIPEU
  * Descomentar y usar cuando se tenga acceso a la API real
  */
 
-/*
+
 async function makeShipeuRequest(endpoint, options = {}) {
-  const response = await fetch(`${SHIPEU_CONFIG.API_URL}/${SHIPEU_CONFIG.API_VERSION}${endpoint}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-Shipeu-App-Key': SHIPEU_CONFIG.APP_KEY,
-      ...options.headers,
-    },
-    timeout: SHIPEU_CONFIG.TIMEOUT,
-  });
+  try {
+    const response = await fetch(`${SHIPEU_CONFIG.API_URL}${endpoint}`, { 
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${SHIPEU_CONFIG.SHIPEU_API_KEY}`,
+        ...options.headers,
+      },
+      timeout: SHIPEU_CONFIG.TIMEOUT,
+    });
 
-  const data = await response.json();
+    // Primero verificamos si la respuesta es JSON
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      throw new Error("La respuesta del servidor no es JSON válido");
+    }
 
-  if (!response.ok) {
-    throw new Error(data.message || 'Error en la comunicación con Shipeu');
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Error en la comunicación con Shipeu');
+    }
+
+    return data;
+  } catch (error) {
+    if (error.name === 'SyntaxError') {
+      throw new Error('La respuesta del servidor no es JSON válido');
+    }
+    throw error;
   }
-
-  return data;
 }
 
 export async function registerStore(storeData) {
-  const data = await makeShipeuRequest('/stores/register', {
+  const response = await makeShipeuRequest('/store/register', {
     method: 'POST',
     body: JSON.stringify({
-      store_name: storeData.storeName,
+      storeName: storeData.storeName,
       email: storeData.email,
-      primary_phone: storeData.phone1,
-      secondary_phone: storeData.phone2,
-      address: storeData.storeAddress,
-      contact_name: storeData.contact,
+      phone1: storeData.phone1,
+      phone2: storeData.phone2,
+      storeAddress: storeData.storeAddress,
+      contact: storeData.contact,
       country: storeData.country,
       state: storeData.state,
       city: storeData.city,
-      postal_code: storeData.postalCode,
-      tax_id: storeData.cif
+      postalCode: storeData.postalCode,
+      cif: storeData.cif
     })
   });
 
+  // La respuesta ya tiene la estructura correcta
   return {
-    apiKey: data.api_key,
-    storeId: data.store_id,
-    status: data.status || 'active'
+    apiKey: response.data.apiKey,
+    shipeuId: response.data.storeId.toString(),
+    status: response.data.status
   };
 }
 
-export async function syncStore({ apiKey, email }) {
-  const data = await makeShipeuRequest('/stores/sync', {
+export async function syncStore({ email }) {
+  const response = await makeShipeuRequest('/store/sync', {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`
-    },
     body: JSON.stringify({ email })
   });
 
   return {
-    storeId: data.store_id,
-    status: data.status || 'active'
+    shipeuId: response.data.storeId.toString(),
+    status: response.data.status,
+    apiKey: response.data.apiKey
   };
 }
 
 export async function regenerateApiKey(oldApiKey) {
-  const data = await makeShipeuRequest('/stores/regenerate-key', {
+  const response = await makeShipeuRequest('/store/regenerate-key', {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${oldApiKey}`
-    }
+    body: JSON.stringify({ apiKey: oldApiKey })
   });
 
   return {
-    apiKey: data.new_api_key
+    apiKey: response.data.apiKey
   };
 }
-*/
+
+
+
 
 /**
  * IMPLEMENTACIÓN SIMULADA
  * Usar mientras no se tenga acceso a la API real
  */
 
+/*
 import { randomUUID } from 'crypto';
+
+// Simulamos la configuración
+const MOCK_CONFIG = {
+  SHIPEU_API_KEY: process.env.SHIPEU_SHOPIFY_API_KEY || 'test_api_key'
+};
 
 export async function registerStore(storeData) {
   // Simulamos un delay para hacer más realista la respuesta
@@ -114,6 +131,11 @@ export async function registerStore(storeData) {
     throw new Error('El email no es válido');
   }
 
+  // Validamos que se esté usando la API key correcta
+  if (!validateShipeuApiKey()) {
+    throw new Error('API Key general no válida');
+  }
+
   // Simulamos una respuesta exitosa
   return {
     apiKey: randomUUID(),
@@ -121,19 +143,20 @@ export async function registerStore(storeData) {
   };
 }
 
-export async function syncStore({ apiKey, email }) {
+export async function syncStore({ email }) {
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  if (!apiKey || !email) {
-    throw new Error('API Key y email son requeridos');
+  if (!email) {
+    throw new Error('Email es requerido');
   }
 
   if (!validateEmail(email)) {
     throw new Error('El email no es válido');
   }
 
-  if (!validateApiKey(apiKey)) {
-    throw new Error('API Key no válida');
+  // Validamos que se esté usando la API key correcta
+  if (!validateShipeuApiKey()) {
+    throw new Error('API Key general no válida');
   }
 
   return {
@@ -144,14 +167,16 @@ export async function syncStore({ apiKey, email }) {
 export async function regenerateApiKey(oldApiKey) {
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  if (!validateApiKey(oldApiKey)) {
-    throw new Error('API Key actual no válida');
+  // Validamos que se esté usando la API key correcta
+  if (!validateShipeuApiKey()) {
+    throw new Error('API Key general no válida');
   }
 
   return {
     apiKey: randomUUID()
   };
 }
+*/
 
 // Funciones de utilidad para validación
 export function validateEmail(email) {
@@ -161,4 +186,9 @@ export function validateEmail(email) {
 
 export function validateApiKey(apiKey) {
   return apiKey && apiKey.length > 10;
+}
+
+// Nueva función para validar la API key general
+function validateShipeuApiKey() {
+  return SHIPEU_CONFIG.SHIPEU_API_KEY && SHIPEU_CONFIG.SHIPEU_API_KEY.length > 10;
 } 
