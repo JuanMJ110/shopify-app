@@ -35,10 +35,42 @@ export const loader = async ({ request }) => {
     },
   });
 
+  // Obtener las localizaciones de Shopify
+  const response = await admin.graphql(
+    `#graphql
+      query {
+        locations(first: 50) {
+          edges {
+            node {
+              id
+              name
+              address {
+                address1
+                city
+                province
+                country
+                zip
+              }
+            }
+          }
+        }
+      }
+    `
+  );
+
+  const responseJson = await response.json();
+  const locations = responseJson.data.locations.edges.map(edge => ({
+    id: edge.node.id,
+    name: edge.node.name,
+    address: edge.node.address
+  }));
+
   return json({
     shop: session.shop,
     isConfigured: existingSession?.shipeuStatus === "active",
     apiKey: existingSession?.apiKey || null,
+    shipeuLocationId: existingSession?.shipeuLocationId || null,
+    locations
   });
 };
 
@@ -61,14 +93,14 @@ export const action = async ({ request }) => {
   if (!existingSession) {
     return json({ 
       success: false, 
-      error: "Sesión no válida. Por favor, vuelve a autenticarte." 
+      error: "Invalid session. Please authenticate again." 
     }, { status: 401 });
   }
 
   switch (intent) {
     case "regenerate_api_key": {
       try {
-        const { apiKey } = await regenerateApiKey(session.apiKey);
+        const { apiKey } = await regenerateApiKey(existingSession.apiKey);
 
         await prisma.session.update({
           where: { id: existingSession.id },
@@ -80,10 +112,10 @@ export const action = async ({ request }) => {
 
         return json({ success: true, apiKey });
       } catch (error) {
-        console.error("Error regenerando API key:", error);
+        console.error("Error regenerating API key:", error);
         return json({ 
           success: false, 
-          error: "Error al regenerar la API Key. Por favor, intenta nuevamente." 
+          error: "Error regenerating API Key. Please try again." 
         }, { status: 500 });
       }
     }
@@ -91,6 +123,9 @@ export const action = async ({ request }) => {
     case "register_new_store": {
       try {
         const formFields = Object.fromEntries(formData);
+        console.log("Form fields for registration:", formFields);
+        console.log("Location ID from form:", formFields.locationId);
+        
         const { apiKey, status, shipeuId } = await registerStore({
           ...formFields
         });
@@ -102,32 +137,36 @@ export const action = async ({ request }) => {
             shipeuStatus: status,
             shipeuId,
             email: formFields.email,
-          },
+            shipeuLocationId: formFields.locationId
+          }
         });
 
         return json({ 
           success: true, 
-          message: "Tienda registrada exitosamente",
+          message: "Store registered successfully",
           data: {
             apiKey,
             status,
-            storeId: shipeuId
+            storeId: shipeuId,
+            shipeuLocationId: formFields.locationId
           }
         });
       } catch (error) {
-        console.error("Error al registrar tienda:", error);
+        console.error("Error registering store:", error);
         return json({ 
           success: false, 
-          error: error.message || "Error al registrar la tienda. Por favor, verifica los datos e intenta nuevamente."
+          error: error.message || "Error registering the store. Please verify the data and try again."
         }, { status: 500 });
       }
     }
 
     case "sync_existing_store": {
       try {
-        const { apiKey, email } = Object.fromEntries(formData);
+        const formFields = Object.fromEntries(formData);
+        console.log("Form fields for sync:", formFields);
+        
         const { status, shipeuId, apiKey: newApiKey } = await syncStore({ 
-          email
+          email: formFields.email
         });
         
         await prisma.session.update({
@@ -136,35 +175,37 @@ export const action = async ({ request }) => {
             apiKey: newApiKey,
             shipeuStatus: status,
             shipeuId,
-            email,
-          },
+            email: formFields.email,
+            shipeuLocationId: formFields.locationId
+          }
         });
 
         return json({ 
           success: true, 
-          message: "Tienda sincronizada exitosamente",
+          message: "Store synchronized successfully",
           data: {
             apiKey: newApiKey,
             status,
-            storeId: shipeuId
+            storeId: shipeuId,
+            shipeuLocationId: formFields.locationId
           }
         });
       } catch (error) {
-        console.error("Error al sincronizar tienda:", error);
+        console.error("Error synchronizing store:", error);
         return json({ 
           success: false, 
-          error: error.message || "Error al sincronizar la tienda. Por favor, verifica tus credenciales."
+          error: error.message || "Error synchronizing the store. Please verify your credentials."
         }, { status: 500 });
       }
     }
 
     default:
-      return json({ success: false, error: "Acción no válida" }, { status: 400 });
+      return json({ success: false, error: "Invalid action" }, { status: 400 });
   }
 };
 
 export default function ShipeuSync() {
-  const { isConfigured, apiKey: initialApiKey } = useLoaderData();
+  const { isConfigured, apiKey: initialApiKey, locations, shipeuLocationId } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
   const [currentApiKey, setCurrentApiKey] = useState(() => actionData?.apiKey || initialApiKey || "");
@@ -188,10 +229,12 @@ export default function ShipeuSync() {
     postalCode: "",
     phone2: "",
     cif: "",
+    locationId: shipeuLocationId || ""
   });
   const [syncFormData, setSyncFormData] = useState({
     apiKey: "",
-    email: ""
+    email: "",
+    locationId: shipeuLocationId || ""
   });
 
   useEffect(() => {
@@ -227,21 +270,22 @@ export default function ShipeuSync() {
         postalCode: "",
         phone2: "",
         cif: "",
+        locationId: shipeuLocationId || ""
       });
     }
   }, [actionData]);
 
   function handleToggleApiKey() {
     setShowApiKey(!showApiKey);
-    setToastMessage(showApiKey ? "API Key oculta" : "API Key visible");
+    setToastMessage(showApiKey ? "API Key hidden" : "API Key visible");
     setToastActive(true);
   }
 
   function handleGenerateApiKey() {
-    if (confirm("¿Estás seguro de que deseas regenerar la API Key? La API Key anterior dejará de funcionar.")) {
+    if (confirm("Are you sure you want to regenerate the API Key? The previous API Key will stop working.")) {
       setShowApiKey(false);
       submit({ intent: "regenerate_api_key" }, { method: "post" });
-      setToastMessage("Solicitando nueva API Key...");
+      setToastMessage("Requesting new API Key...");
       setToastActive(true);
     }
   }
@@ -250,22 +294,30 @@ export default function ShipeuSync() {
     if (!currentApiKey) return;
     
     navigator.clipboard.writeText(currentApiKey);
-    setToastMessage("API Key copiada al portapapeles");
+    setToastMessage("API Key copied to clipboard");
     setToastActive(true);
   }
 
   function handleInputChange(field) {
     return (value) => {
-      setFormData(prev => ({ ...prev, [field]: value }));
+      console.log(`[Form] Field changed: ${field} = ${value}`);
+      setFormData(prev => {
+        const newData = { ...prev, [field]: value };
+        console.log("[Form] New form data:", newData);
+        return newData;
+      });
     };
   }
 
   function handleSubmit(e) {
     e.preventDefault();
-    submit({ 
-      ...formData, 
-      intent: "register_new_store"
-    }, { method: "post" });
+    console.log("[Form] Submitting form with data:", formData);
+    const formDataToSubmit = new FormData();
+    Object.entries(formData).forEach(([key, value]) => {
+      formDataToSubmit.append(key, value);
+    });
+    formDataToSubmit.append("intent", "register_new_store");
+    submit(formDataToSubmit, { method: "post" });
   }
 
   const handleSyncExisting = () => {
@@ -274,23 +326,31 @@ export default function ShipeuSync() {
 
   const handleSyncSubmit = (e) => {
     e.preventDefault();
-    submit({ 
-      ...syncFormData, 
-      intent: "sync_existing_store"
-    }, { method: "post" });
+    console.log("[Sync Form] Submitting with data:", syncFormData);
+    const formDataToSubmit = new FormData();
+    Object.entries(syncFormData).forEach(([key, value]) => {
+      formDataToSubmit.append(key, value);
+    });
+    formDataToSubmit.append("intent", "sync_existing_store");
+    submit(formDataToSubmit, { method: "post" });
   };
 
   const handleSyncInputChange = (field) => {
     return (value) => {
-      setSyncFormData(prev => ({ ...prev, [field]: value }));
+      console.log(`[Sync Form] Field changed: ${field} = ${value}`);
+      setSyncFormData(prev => {
+        const newData = { ...prev, [field]: value };
+        console.log("[Sync Form] New form data:", newData);
+        return newData;
+      });
     };
   };
 
   return (
     <Frame>
       <Page
-        title="Configuración de Shipeu"
-        backAction={{ url: "/app", content: "Volver" }}
+        title="Shipeu Configuration"
+        backAction={{ url: "/app", content: "Back" }}
       >
         {toastActive && (
           <Toast
@@ -312,7 +372,7 @@ export default function ShipeuSync() {
               <Card sectioned>
                 <BlockStack gap="8">
                   <div>
-                    <Text variant="headingMd">API Key de Shipeu</Text>
+                    <Text variant="headingMd">API Key of Shipeu</Text>
                     <div style={{ 
                       marginTop: '1rem',
                       display: 'flex', 
@@ -354,13 +414,13 @@ export default function ShipeuSync() {
                   </div>
 
                   <div style={{ marginTop: '2rem' }}>
-                    <Text variant="headingMd">Regenerar API Key</Text>
+                    <Text variant="headingMd">Regenerate API Key</Text>
                     <Text as="p" variant="bodyMd" color="subdued">
-                      Si necesitas una nueva API Key, puedes regenerarla. Ten en cuenta que la API Key anterior dejará de funcionar.
+                      If you need a new API Key, you can regenerate it. Note that the previous API Key will stop working.
                     </Text>
                     <div style={{ marginTop: '1rem' }}>
                       <Button onClick={handleGenerateApiKey} tone="critical">
-                        Regenerar API Key
+                        Regenerate API Key
                       </Button>
                     </div>
                   </div>
@@ -369,13 +429,13 @@ export default function ShipeuSync() {
             ) : showRegistrationForm ? (
               <Card sectioned>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <Text variant="headingMd">Registrarme en Shipeu</Text>
+                  <Text variant="headingMd">Register with Shipeu</Text>
                   <Button plain onClick={() => setShowRegistrationForm(false)}>
-                    Volver
+                    Back
                   </Button>
                 </div>
                 <Text color="subdued">
-                  Complete el formulario para registrar su tienda en Shipeu y comenzar a disfrutar de nuestros servicios.
+                  Complete the form to register your store with Shipeu and start enjoying our services.
                 </Text>
                 <div style={{ 
                   marginTop: '1rem', 
@@ -388,12 +448,12 @@ export default function ShipeuSync() {
                     <FormLayout>
                       <FormLayout.Group>
                         <TextField
-                          label="Nombre de la empresa"
+                          label="Company Name"
                           value={formData.storeName}
                           onChange={handleInputChange("storeName")}
                           autoComplete="off"
                           required
-                          helpText="Nombre legal de tu empresa"
+                          helpText="Legal name of your company"
                         />
                         <TextField
                           label="CIF"
@@ -401,18 +461,18 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("cif")}
                           autoComplete="off"
                           required
-                          helpText="CIF de tu empresa"
+                          helpText="CIF of your company"
                         />
                       </FormLayout.Group>
 
                       <FormLayout.Group>
                         <TextField
-                          label="Contacto"
+                          label="Contact"
                           value={formData.contact}
                           onChange={handleInputChange("contact")}
                           autoComplete="off"
                           required
-                          helpText="Nombre de la persona de contacto"
+                          helpText="Name of the contact person"
                         />
                         <TextField
                           label="Email"
@@ -421,85 +481,99 @@ export default function ShipeuSync() {
                           onChange={handleInputChange("email")}
                           autoComplete="off"
                           required
-                          helpText="Email principal de contacto"
+                          helpText="Primary contact email"
                         />
                       </FormLayout.Group>
 
                       <FormLayout.Group>
                         <TextField
-                          label="Teléfono principal"
+                          label="Primary Phone"
                           type="tel"
                           value={formData.phone1}
                           onChange={handleInputChange("phone1")}
                           autoComplete="off"
                           required
-                          helpText="Teléfono principal de contacto"
+                          helpText="Primary contact phone"
                         />
                         <TextField
-                          label="Teléfono secundario"
+                          label="Secondary Phone"
                           type="tel"
                           value={formData.phone2}
                           onChange={handleInputChange("phone2")}
                           autoComplete="off"
-                          helpText="Teléfono secundario (opcional)"
+                          helpText="Secondary phone (optional)"
                         />
                       </FormLayout.Group>
 
                       <FormLayout.Group condensed>
                         <div style={{ flex: '1' }}>
                           <Select
-                            label="País"
+                            label="Country"
                             options={[
-                              {label: 'España', value: 'ES'},
-                              {label: 'Otro', value: 'OTHER'}
+                              {label: 'Spain', value: 'ES'},
+                              {label: 'Other', value: 'OTHER'}
                             ]}
                             value={formData.country}
                             onChange={handleInputChange("country")}
                             required
-                            helpText="País donde está ubicada tu empresa"
+                            helpText="Country where your company is located"
                           />
                         </div>
                         <div style={{ flex: '1' }}>
                           <TextField
-                            label="Provincia"
+                            label="Province"
                             value={formData.state}
                             onChange={handleInputChange("state")}
                             autoComplete="off"
                             required
-                            helpText="Provincia donde está ubicada tu empresa"
+                            helpText="Province where your company is located"
                           />
                         </div>
                       </FormLayout.Group>
 
                       <FormLayout.Group>
                         <TextField
-                          label="Ciudad"
+                          label="City"
                           value={formData.city}
                           onChange={handleInputChange("city")}
                           autoComplete="off"
                           required
-                          helpText="Ciudad donde está ubicada tu empresa"
+                          helpText="City where your company is located"
                         />
                         <TextField
-                          label="Código postal"
+                          label="Postal Code"
                           value={formData.postalCode}
                           onChange={handleInputChange("postalCode")}
                           type="text"
                           autoComplete="off"
                           required
-                          helpText="Código postal de tu dirección"
+                          helpText="Postal code of your address"
                         />
                       </FormLayout.Group>
 
                       <TextField
-                        label="Dirección"
+                        label="Address"
                         value={formData.storeAddress}
                         onChange={handleInputChange("storeAddress")}
                         multiline={2}
                         autoComplete="off"
                         required
-                        helpText="Dirección completa de tu empresa"
+                        helpText="Complete address of your company"
                       />
+
+                      <FormLayout.Group>
+                        <Select
+                          label="Shipeu Location"
+                          options={locations.map(loc => ({
+                            label: `${loc.name} - ${loc.address.city}, ${loc.address.province}`,
+                            value: loc.id
+                          }))}
+                          value={formData.locationId}
+                          onChange={handleInputChange("locationId")}
+                          required
+                          helpText="Select the location that will be used for Shipeu inventory management"
+                        />
+                      </FormLayout.Group>
 
                       <div style={{ 
                         display: 'flex', 
@@ -507,7 +581,7 @@ export default function ShipeuSync() {
                         marginTop: '1.5rem'
                       }}>
                         <Button submit primary size="large">
-                          Registrar tienda
+                          Register Store
                         </Button>
                       </div>
                     </FormLayout>
@@ -517,25 +591,17 @@ export default function ShipeuSync() {
             ) : showSyncForm ? (
               <Card sectioned>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <Text variant="headingMd">Sincronizar tienda existente</Text>
+                  <Text variant="headingMd">Synchronize existing store</Text>
                   <Button plain onClick={() => setShowSyncForm(false)}>
-                    Volver
+                    Back
                   </Button>
                 </div>
                 <Text color="subdued">
-                  Introduce tu API Key y email de Shipeu para sincronizar tu tienda.
+                  Enter your Shipeu registered email to synchronize your store.
                 </Text>
                 <div style={{ marginTop: '1rem' }}>
                   <form onSubmit={handleSyncSubmit}>
                     <FormLayout>
-                      <TextField
-                        label="API Key de Shipeu"
-                        value={syncFormData.apiKey}
-                        onChange={handleSyncInputChange("apiKey")}
-                        type="password"
-                        autoComplete="off"
-                        required
-                      />
                       <TextField
                         label="Email"
                         value={syncFormData.email}
@@ -544,13 +610,26 @@ export default function ShipeuSync() {
                         autoComplete="off"
                         required
                       />
+                      <FormLayout.Group>
+                        <Select
+                          label="Shipeu Location"
+                          options={locations.map(loc => ({
+                            label: `${loc.name} - ${loc.address.city}, ${loc.address.province}`,
+                            value: loc.id
+                          }))}
+                          value={syncFormData.locationId}
+                          onChange={handleSyncInputChange("locationId")}
+                          required
+                          helpText="Select the location that will be used for Shipeu inventory management"
+                        />
+                      </FormLayout.Group>
                       <div style={{ 
                         display: 'flex', 
                         justifyContent: 'center', 
                         marginTop: '1rem'
                       }}>
                         <Button submit primary size="large">
-                          Sincronizar tienda
+                          Synchronize Store
                         </Button>
                       </div>
                     </FormLayout>
@@ -560,25 +639,25 @@ export default function ShipeuSync() {
             ) : (
               <>
                 <Card sectioned>
-                  <Text variant="headingMd">¿Ya eres cliente de Shipeu?</Text>
+                  <Text variant="headingMd">Already a Shipeu customer?</Text>
                   <Text color="subdued" as="p" variant="bodyMd">
-                    Si ya tienes una cuenta en Shipeu, sincroniza tu tienda para comenzar a usar nuestros servicios.
+                    If you already have a Shipeu account, sync your store to start using our services.
                   </Text>
                   <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
                     <Button onClick={handleSyncExisting} primary size="medium">
-                      Ya soy cliente - Sincronizar tienda
+                      Yes, I'm a customer - Synchronize Store
                     </Button>
                   </div>
                 </Card>
                 <div style={{ marginTop: '1rem' }}>
                   <Card sectioned>
-                    <Text variant="headingMd">¿Nuevo en Shipeu?</Text>
+                    <Text variant="headingMd">New to Shipeu?</Text>
                     <Text color="subdued" as="p" variant="bodyMd">
-                      Regístrate en Shipeu para acceder a nuestros servicios de envío y gestión logística.
+                      Register with Shipeu to access our shipping and logistics management services.
                     </Text>
                     <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
                       <Button onClick={() => setShowRegistrationForm(true)} size="medium">
-                        Registrarme en Shipeu
+                        Register with Shipeu
                       </Button>
                     </div>
                   </Card>

@@ -16,9 +16,9 @@ datasource db {
 
 model Session {
   id            String    @id @default(cuid())
-  shop          String
+  shop          String    @unique
   state         String
-  isOnline      Boolean   @default(true)
+  isOnline      Boolean   @default(false)
   scope         String?
   expires       DateTime?
   accessToken   String
@@ -34,6 +34,7 @@ model Session {
   shipeuStatus  String?   @default("pending")
   shipeuId      String?   
   lastSync      DateTime?
+  shipeuLocationId String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   
