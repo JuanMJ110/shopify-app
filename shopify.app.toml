@@ -1,10 +1,10 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "74e2e8c014ffbbc5621af4a6731ebddf"
-application_url = "https://4502-2800-484-a27c-5800-44d9-a589-16e7-a9af.ngrok-free.app"
+application_url = "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app"
 embedded = true
-name = "shipeu-order-test"
-handle = "shipeu-order-test"
+name = "shipeu-middleware"
+handle = "shipeu-middleware"
 
 [webhooks]
 api_version = "2025-01"
@@ -39,9 +39,9 @@ scopes = "read_all_orders,read_orders,write_orders,read_products,write_products,
 
 [auth]
 redirect_urls = [
-  "https://4502-2800-484-a27c-5800-44d9-a589-16e7-a9af.ngrok-free.app/auth/callback",
-  "https://4502-2800-484-a27c-5800-44d9-a589-16e7-a9af.ngrok-free.app/auth/shopify/callback",
-  "https://4502-2800-484-a27c-5800-44d9-a589-16e7-a9af.ngrok-free.app/api/auth/callback"
+  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/auth/callback",
+  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/auth/shopify/callback",
+  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/api/auth/callback"
 ]
 
 [pos]

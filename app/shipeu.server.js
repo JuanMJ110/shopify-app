@@ -1,6 +1,5 @@
 /**
  * Configuración de la API de Shipeu
- * Descomentar y configurar cuando se tenga acceso a la API real
  */
 
 const SHIPEU_CONFIG = {
@@ -11,9 +10,7 @@ const SHIPEU_CONFIG = {
 
 /**
  * IMPLEMENTACIÓN REAL DE LA API DE SHIPEU
- * Descomentar y usar cuando se tenga acceso a la API real
  */
-
 
 async function makeShipeuRequest(endpoint, options = {}) {
   try {
@@ -98,9 +95,6 @@ export async function regenerateApiKey(oldApiKey) {
     apiKey: response.data.apiKey
   };
 }
-
-
-
 
 /**
  * IMPLEMENTACIÓN SIMULADA
