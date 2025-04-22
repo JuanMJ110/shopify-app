@@ -12,6 +12,7 @@ import {
   Icon,
   Box,
   List,
+  Badge,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -127,7 +128,7 @@ export default function Index() {
               <Box padding="500">
                 <div style={{ textAlign: 'center', maxWidth: '800px', margin: '0 auto' }}>
                   <BlockStack gap="400" align="center">
-                    <Text as="h2" variant="headingXl">
+                    <Text as="h2" variant="headingXl" color="success">
                       Optimiza tu logística con Shipeu
                     </Text>
                     <Text as="p" variant="bodyLg" color="subdued" alignment="center">
@@ -159,7 +160,7 @@ export default function Index() {
               <Card roundedAbove="xl">
                 <Box padding="500">
                   <BlockStack gap="400">
-                    <Text as="h3" variant="headingLg" alignment="center">
+                    <Text as="h3" variant="headingLg" alignment="center" color="success">
                       Características principales
                     </Text>
 
@@ -170,20 +171,17 @@ export default function Index() {
                       width: '100%'
                     }}>
                       {features.map((feature, index) => (
-                        <div key={index} style={{
-                          backgroundColor: 'var(--p-surface)',
-                          borderRadius: 'var(--p-border-radius-400)',
-                          padding: '24px',
-                        }}>
+                        <Card key={index} sectioned>
                           <BlockStack gap="300" align="center">
                             <div style={{
                               color: 'var(--p-action-primary)',
                               backgroundColor: 'var(--p-surface-selected)',
-                              padding: '12px',
+                              padding: '16px',
                               borderRadius: '50%',
                               display: 'inline-flex',
                               alignItems: 'center',
-                              justifyContent: 'center'
+                              justifyContent: 'center',
+                              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                             }}>
                               <Icon source={feature.icon} />
                             </div>
@@ -194,7 +192,7 @@ export default function Index() {
                               {feature.description}
                             </Text>
                           </BlockStack>
-                        </div>
+                        </Card>
                       ))}
                     </div>
                   </BlockStack>
@@ -207,7 +205,7 @@ export default function Index() {
             <Card roundedAbove="xl">
               <Box padding="500" paddingBlockEnd="800">
                 <BlockStack gap="400">
-                  <Text as="h3" variant="headingLg" alignment="center">
+                  <Text as="h3" variant="headingLg" alignment="center" color="success">
                     ¿Por qué elegir Shipeu?
                   </Text>
                   <div style={{
@@ -217,20 +215,17 @@ export default function Index() {
                     width: '100%'
                   }}>
                     {reasons.map((reason, index) => (
-                      <div key={index} style={{
-                        backgroundColor: 'var(--p-surface)',
-                        borderRadius: 'var(--p-border-radius-400)',
-                        padding: '24px',
-                      }}>
+                      <Card key={index} sectioned>
                         <BlockStack gap="300" align="center">
                           <div style={{
                             color: 'var(--p-action-primary)',
                             backgroundColor: 'var(--p-surface-selected)',
-                            padding: '12px',
+                            padding: '16px',
                             borderRadius: '50%',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            justifyContent: 'center'
+                            justifyContent: 'center',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                           }}>
                             <Icon source={reason.icon} />
                           </div>
@@ -241,7 +236,7 @@ export default function Index() {
                             {reason.description}
                           </Text>
                         </BlockStack>
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 </BlockStack>
