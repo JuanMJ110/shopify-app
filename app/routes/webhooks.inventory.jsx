@@ -1,6 +1,49 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 segundo
+
+async function retryOperation(operation, maxRetries = MAX_RETRIES) {
+  let lastError;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (error.status === 429) { // Rate limit
+        const retryAfter = error.headers?.get('Retry-After') || RETRY_DELAY;
+        await new Promise(resolve => setTimeout(resolve, retryAfter));
+      } else if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, i)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function validatePayload(payload, topic) {
+  const requiredFields = {
+    'inventory_levels/update': ['inventory_item_id', 'available', 'location_id'],
+    'inventory_items/create': ['id', 'sku'],
+    'inventory_items/update': ['id'],
+    'inventory_items/delete': ['id']
+  };
+
+  const fields = requiredFields[topic];
+  if (!fields) return { valid: true };
+
+  const missingFields = fields.filter(field => !payload[field]);
+  if (missingFields.length > 0) {
+    return {
+      valid: false,
+      error: `Missing required fields: ${missingFields.join(', ')}`
+    };
+  }
+
+  return { valid: true };
+}
+
 function extractLocationId(locationGid) {
   if (!locationGid) return null;
   // Si es solo número, convertirlo a entero
@@ -20,7 +63,6 @@ function formatInventoryItemGid(id) {
 async function getInventoryItemDetails(admin, inventoryItemId) {
   try {
     const formattedId = formatInventoryItemGid(inventoryItemId);
-    console.log("[Shopify API] Fetching inventory item details for:", formattedId);
     const response = await admin.graphql(
       `#graphql
       query getInventoryItem($id: ID!) {
@@ -50,67 +92,38 @@ async function getInventoryItemDetails(admin, inventoryItemId) {
     );
 
     const responseJson = await response.json();
-    console.log("[Shopify API] Response:", JSON.stringify(responseJson, null, 2));
     return responseJson.data.inventoryItem;
   } catch (error) {
-    console.error("[Shopify API] Error fetching inventory item details:", error);
     throw error;
   }
 }
 
 async function syncWithShipeu({ sellerId, operation, data }) {
-  try {
-    console.log(`[Shipeu Sync] Sending update to Shipeu:`, {
-      sellerId,
-      operation,
-      data
-    });
-    
-    const response = await fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        sellerId,
-        operation,
-        ...data
-      })
-    });
-
-    const responseText = await response.text();
-    
-    // Verificar si la respuesta es HTML
-    if (responseText.trim().startsWith('<!DOCTYPE html>')) {
-      return {
-        success: false,
-        status: 'error',
-        source: 'shipeu',
-        message: 'Received HTML response instead of JSON',
-        receivedData: {
+  return retryOperation(async () => {
+    try {
+      const response = await fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
           sellerId,
           operation,
           ...data
-        },
-        error: {
-          status: response.status,
-          response: responseText
-        }
-      };
-    }
+        })
+      });
 
-    try {
-      const jsonResponse = JSON.parse(responseText);
+      const responseText = await response.text();
       
-      // Verificar si la respuesta es un error de validación
-      if (response.status >= 400) {
-        return {
+      // Verificar si la respuesta es HTML
+      if (responseText.trim().startsWith('<!DOCTYPE html>')) {
+        const errorResponse = {
           success: false,
           status: 'error',
           source: 'shipeu',
-          message: jsonResponse.message || 'Error from Shipeu API',
+          message: 'Received HTML response instead of JSON',
           receivedData: {
             sellerId,
             operation,
@@ -118,64 +131,79 @@ async function syncWithShipeu({ sellerId, operation, data }) {
           },
           error: {
             status: response.status,
-            message: jsonResponse.message,
-            details: jsonResponse
+            response: responseText
           }
         };
+
+        return errorResponse;
       }
 
-      // Respuesta exitosa
-      return {
-        success: true,
-        status: 'success',
-        source: 'shipeu',
-        message: 'Operation completed successfully',
-        receivedData: {
-          sellerId,
-          operation,
-          ...data
-        },
-        response: {
-          ...jsonResponse,
-          operation,
-          timestamp: new Date().toISOString()
+      try {
+        const jsonResponse = JSON.parse(responseText);
+        
+        // Verificar si la respuesta es un error de validación
+        if (response.status >= 400) {
+          const errorResponse = {
+            success: false,
+            status: 'error',
+            source: 'shipeu',
+            message: jsonResponse.message || 'Error from Shipeu API',
+            receivedData: {
+              sellerId,
+              operation,
+              ...data
+            },
+            error: {
+              status: response.status,
+              message: jsonResponse.message,
+              details: jsonResponse
+            }
+          };
+
+          return errorResponse;
         }
-      };
-    } catch (parseError) {
-      return {
-        success: false,
-        status: 'error',
-        source: 'shipeu',
-        message: 'Failed to parse JSON response',
-        receivedData: {
-          sellerId,
-          operation,
-          ...data
-        },
-        error: {
-          message: parseError.message,
-          response: responseText
-        }
-      };
+
+        const successResponse = {
+          success: true,
+          status: 'success',
+          source: 'shipeu',
+          message: 'Operation completed successfully',
+          receivedData: {
+            sellerId,
+            operation,
+            ...data
+          },
+          response: {
+            ...jsonResponse,
+            operation,
+            timestamp: new Date().toISOString()
+          }
+        };
+
+        return successResponse;
+      } catch (parseError) {
+        const errorResponse = {
+          success: false,
+          status: 'error',
+          source: 'shipeu',
+          message: 'Failed to parse JSON response',
+          receivedData: {
+            sellerId,
+            operation,
+            ...data
+          },
+          error: {
+            message: parseError.message,
+            response: responseText
+          }
+        };
+
+        return errorResponse;
+      }
+    } catch (error) {
+      throw error;
     }
-
-  } catch (error) {
-    return {
-      success: false,
-      status: 'error',
-      source: 'shipeu',
-      message: 'Error communicating with Shipeu',
-      receivedData: {
-        sellerId,
-        operation,
-        ...data
-      },
-      error: {
-        message: error.message,
-        stack: error.stack
-      }
-    };
-  }
+  });
 }
 
 function isRelevantLocation(locationId, configuredLocationId) {
@@ -185,17 +213,11 @@ function isRelevantLocation(locationId, configuredLocationId) {
 }
 
 export const action = async ({ request }) => {
-  console.log("[Webhook Debug] ==========================================");
-  console.log("[Webhook Debug] Starting inventory webhook handler");
-  
   try {
     const { shop, admin, topic, payload } = await authenticate.webhook(request);
 
     // Normalizar el topic a minúsculas y formato estándar
     const normalizedTopic = topic.toLowerCase();
-    console.log(`[Webhook Debug] Original topic: ${topic}, Normalized: ${normalizedTopic}`);
-    console.log(`[Webhook Debug] Received webhook for ${shop}`);
-    console.log(`[Webhook Debug] Raw Payload:`, JSON.stringify(payload, null, 2));
 
     // Buscar la sesión más reciente
     const existingSession = await prisma.session.findFirst({
@@ -215,17 +237,7 @@ export const action = async ({ request }) => {
       }
     });
 
-    console.log(`[Webhook Debug] Session search result:`, existingSession ? {
-      id: existingSession.id,
-      shop: existingSession.shop,
-      shipeuLocationId: existingSession.shipeuLocationId,
-      shipeuId: existingSession.shipeuId,
-      createdAt: existingSession.createdAt,
-      updatedAt: existingSession.updatedAt
-    } : 'No session found');
-
     if (!existingSession) {
-      console.log(`[Webhook Debug] No session found for shop ${shop}`);
       return new Response(
         JSON.stringify({
           error: "No session found",
@@ -243,7 +255,6 @@ export const action = async ({ request }) => {
     // Verificar si el payload incluye location_id
     const locationId = payload.location_id || payload.location?.id;
     if (locationId && !isRelevantLocation(locationId, existingSession.shipeuLocationId)) {
-      console.log(`[Webhook Debug] Location mismatch. Expected: ${existingSession.shipeuLocationId}, Received: ${locationId}`);
       return new Response(
         JSON.stringify({
           status: "ignored",
@@ -269,7 +280,6 @@ export const action = async ({ request }) => {
         const normalizedReceivedLocation = parseInt(location_id, 10);
 
         if (normalizedConfiguredLocation !== normalizedReceivedLocation) {
-          console.log(`[Webhook Debug] Location mismatch. Expected: ${normalizedConfiguredLocation}, Received: ${normalizedReceivedLocation}`);
           return new Response(
             JSON.stringify({
               status: "ignored",
@@ -289,7 +299,6 @@ export const action = async ({ request }) => {
         const itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
         
         if (!itemDetails?.sku) {
-          console.log(`[Webhook Debug] No SKU found for inventory item: ${inventory_item_id}`);
           return new Response(
             JSON.stringify({
               status: "error",
@@ -297,6 +306,7 @@ export const action = async ({ request }) => {
               case: "inventory_levels_update",
               inventoryItem: itemDetails,
               inventory_item_id,
+              payload: payload,
               timestamp: new Date().toISOString()
             }, null, 2),
             { 
@@ -335,6 +345,7 @@ export const action = async ({ request }) => {
                 inventory_item_id,
                 location_id
               },
+              payload: payload,
               timestamp: new Date().toISOString()
             }, null, 2),
             { 
@@ -350,6 +361,7 @@ export const action = async ({ request }) => {
               message: syncResult.message,
               receivedData: syncResult.receivedData,
               error: syncResult.error,
+              payload: payload,
               timestamp: new Date().toISOString()
             }, null, 2),
             { 
@@ -364,7 +376,6 @@ export const action = async ({ request }) => {
         const { id, sku } = payload;
         
         if (!sku) {
-          console.log(`[Webhook Debug] No SKU provided for new inventory item: ${id}`);
           return new Response(
             JSON.stringify({
               status: "error",
@@ -439,128 +450,6 @@ export const action = async ({ request }) => {
         }
       }
 
-      case "inventory_items_update": {
-        const { id } = payload;
-        const itemDetails = await getInventoryItemDetails(admin, id);
-        
-        if (!itemDetails?.sku) {
-          console.log(`[Webhook Debug] No SKU found for updated inventory item: ${id}`);
-          return new Response(
-            JSON.stringify({
-              status: "error",
-              reason: "no_sku_found",
-              case: "inventory_items_update",
-              inventory_item_id: id,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
-
-        // Enviar a Shipeu
-        const syncResult = await syncWithShipeu({
-          sellerId: existingSession.shipeuId,
-          operation: "update_product",
-          data: {
-            sku: itemDetails.sku,
-            inventory_item_id: id,
-            product_title: itemDetails.variant?.product?.title,
-            variant_title: itemDetails.variant?.title,
-            price: itemDetails.variant?.price,
-            vendor: itemDetails.variant?.product?.vendor,
-            product_status: itemDetails.variant?.product?.status,
-            tracked: itemDetails.tracked
-          }
-        });
-
-        if (syncResult.success) {
-          return new Response(
-            JSON.stringify({
-              status: "success",
-              operation: "update_product",
-              data: {
-                sku: itemDetails.sku,
-                inventory_item_id: id,
-                product_title: itemDetails.variant?.product?.title,
-                variant_title: itemDetails.variant?.title,
-                price: itemDetails.variant?.product?.price,
-                vendor: itemDetails.variant?.product?.vendor,
-                product_status: itemDetails.variant?.product?.status,
-                tracked: itemDetails.tracked
-              },
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        } else {
-          return new Response(
-            JSON.stringify({
-              status: syncResult.status,
-              source: syncResult.source,
-              message: syncResult.message,
-              receivedData: syncResult.receivedData,
-              error: syncResult.error,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
-      }
-
-      case "inventory_items_delete": {
-        const { id } = payload;
-        
-        // Enviar a Shipeu
-        const syncResult = await syncWithShipeu({
-          sellerId: existingSession.shipeuId,
-          operation: "delete_product",
-          data: {
-            inventory_item_id: id
-          }
-        });
-
-        if (syncResult.success) {
-          return new Response(
-            JSON.stringify({
-              status: "success",
-              operation: "delete_product",
-              data: {
-                inventory_item_id: id,
-              },
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        } else {
-          return new Response(
-            JSON.stringify({
-              status: syncResult.status,
-              source: syncResult.source,
-              message: syncResult.message,
-              receivedData: syncResult.receivedData,
-              error: syncResult.error,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
-      }
-
       default:
         return new Response(
           JSON.stringify({
@@ -576,16 +465,15 @@ export const action = async ({ request }) => {
     }
 
   } catch (error) {
-    console.error(`[Webhook Error] Failed to process inventory webhook:`, error);
     return new Response(
       JSON.stringify({
         status: "error",
         error: error.message,
-        stack: error.stack,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
         timestamp: new Date().toISOString()
       }, null, 2),
       { 
-        status: 200,
+        status: 500,
         headers: { "Content-Type": "application/json" }
       }
     );

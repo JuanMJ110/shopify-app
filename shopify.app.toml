@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "74e2e8c014ffbbc5621af4a6731ebddf"
-application_url = "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app"
+application_url = "https://realtor-poet-absent-cleaning.trycloudflare.com"
 embedded = true
 name = "shipeu-middleware"
 handle = "shipeu-middleware"
@@ -39,9 +39,9 @@ scopes = "read_all_orders,read_orders,write_orders,read_products,write_products,
 
 [auth]
 redirect_urls = [
-  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/auth/callback",
-  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/auth/shopify/callback",
-  "https://cb28-2800-484-a27c-5800-1824-2999-c17d-9909.ngrok-free.app/api/auth/callback"
+  "https://realtor-poet-absent-cleaning.trycloudflare.com/auth/callback",
+  "https://realtor-poet-absent-cleaning.trycloudflare.com/auth/shopify/callback",
+  "https://realtor-poet-absent-cleaning.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

@@ -47,6 +47,32 @@ export default function App() {
         >
           Configuración Shipeu
         </Link>
+        <Link 
+          to="/app/privacy-policy" 
+          rel="privacy-policy"
+          style={{
+            display: 'block',
+            padding: '0.5rem 2rem',
+            textDecoration: 'none',
+            color: location.pathname === '/app/privacy-policy' ? '#202223' : '#6D7175',
+            fontWeight: location.pathname === '/app/privacy-policy' ? '600' : 'normal'
+          }}
+        >
+          Política de Privacidad
+        </Link>
+        <Link 
+          to="/app/terms-of-service" 
+          rel="terms-of-service"
+          style={{
+            display: 'block',
+            padding: '0.5rem 2rem',
+            textDecoration: 'none',
+            color: location.pathname === '/app/terms-of-service' ? '#202223' : '#6D7175',
+            fontWeight: location.pathname === '/app/terms-of-service' ? '600' : 'normal'
+          }}
+        >
+          Términos de Servicio
+        </Link>
       </NavMenu>
       <Outlet />
     </AppProvider>
