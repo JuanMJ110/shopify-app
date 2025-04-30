@@ -100,30 +100,54 @@ async function getInventoryItemDetails(admin, inventoryItemId) {
 
 async function syncWithShipeu({ sellerId, operation, data }) {
   return retryOperation(async () => {
-    try {
-      const response = await fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
+    const response = await fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        sellerId,
+        operation,
+        ...data
+      })
+    });
+
+    const responseText = await response.text();
+    
+    // Verificar si la respuesta es HTML
+    if (responseText.trim().startsWith('<!DOCTYPE html>')) {
+      const error = new Error('Received HTML response instead of JSON');
+      error.details = {
+        success: false,
+        status: 'error',
+        source: 'shipeu',
+        message: 'Received HTML response instead of JSON',
+        receivedData: {
           sellerId,
           operation,
           ...data
-        })
-      });
+        },
+        error: {
+          status: response.status,
+          response: responseText
+        }
+      };
+      throw error;
+    }
 
-      const responseText = await response.text();
+    try {
+      const jsonResponse = JSON.parse(responseText);
       
-      // Verificar si la respuesta es HTML
-      if (responseText.trim().startsWith('<!DOCTYPE html>')) {
-        const errorResponse = {
+      // Verificar si la respuesta es un error de validación
+      if (response.status >= 400) {
+        const error = new Error(jsonResponse.message || 'Error from Shipeu API');
+        error.details = {
           success: false,
           status: 'error',
           source: 'shipeu',
-          message: 'Received HTML response instead of JSON',
+          message: jsonResponse.message || 'Error from Shipeu API',
           receivedData: {
             sellerId,
             operation,
@@ -131,76 +155,46 @@ async function syncWithShipeu({ sellerId, operation, data }) {
           },
           error: {
             status: response.status,
-            response: responseText
+            message: jsonResponse.message,
+            details: jsonResponse
           }
         };
-
-        return errorResponse;
+        throw error;
       }
 
-      try {
-        const jsonResponse = JSON.parse(responseText);
-        
-        // Verificar si la respuesta es un error de validación
-        if (response.status >= 400) {
-          const errorResponse = {
-            success: false,
-            status: 'error',
-            source: 'shipeu',
-            message: jsonResponse.message || 'Error from Shipeu API',
-            receivedData: {
-              sellerId,
-              operation,
-              ...data
-            },
-            error: {
-              status: response.status,
-              message: jsonResponse.message,
-              details: jsonResponse
-            }
-          };
-
-          return errorResponse;
+      return {
+        success: true,
+        status: 'success',
+        source: 'shipeu',
+        message: 'Operation completed successfully',
+        receivedData: {
+          sellerId,
+          operation,
+          ...data
+        },
+        response: {
+          ...jsonResponse,
+          operation,
+          timestamp: new Date().toISOString()
         }
-
-        const successResponse = {
-          success: true,
-          status: 'success',
-          source: 'shipeu',
-          message: 'Operation completed successfully',
-          receivedData: {
-            sellerId,
-            operation,
-            ...data
-          },
-          response: {
-            ...jsonResponse,
-            operation,
-            timestamp: new Date().toISOString()
-          }
-        };
-
-        return successResponse;
-      } catch (parseError) {
-        const errorResponse = {
-          success: false,
-          status: 'error',
-          source: 'shipeu',
-          message: 'Failed to parse JSON response',
-          receivedData: {
-            sellerId,
-            operation,
-            ...data
-          },
-          error: {
-            message: parseError.message,
-            response: responseText
-          }
-        };
-
-        return errorResponse;
-      }
-    } catch (error) {
+      };
+    } catch (parseError) {
+      const error = new Error(`Failed to parse JSON response: ${parseError.message}`);
+      error.details = {
+        success: false,
+        status: 'error',
+        source: 'shipeu',
+        message: 'Failed to parse JSON response',
+        receivedData: {
+          sellerId,
+          operation,
+          ...data
+        },
+        error: {
+          message: parseError.message,
+          response: responseText
+        }
+      };
       throw error;
     }
   });
