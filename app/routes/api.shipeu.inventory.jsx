@@ -157,6 +157,12 @@ export async function action({ request }) {
         locationId: session.shipeuLocationId
       });
       
+      // Actualizar lastSync incluso cuando el stock ya está actualizado
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { lastSync: new Date() }
+      });
+      
       return json({ 
         success: true,
         message: "Stock ya actualizado",
@@ -165,7 +171,8 @@ export async function action({ request }) {
           quantity,
           currentStock,
           locationId: session.shipeuLocationId,
-          skipped: true
+          skipped: true,
+          timestamp: new Date().toISOString()
         }
       });
     }
@@ -257,6 +264,27 @@ export async function action({ request }) {
 
     // Verificar que tenemos una respuesta válida
     if (!updateData.data?.inventorySetQuantities?.inventoryAdjustmentGroup?.changes?.length > 0) {
+      // Si no hay cambios pero tampoco hay errores, asumimos que la actualización fue exitosa
+      if (!updateData.data?.inventorySetQuantities?.userErrors?.length) {
+        // Actualizar lastSync
+        await prisma.session.update({
+          where: { id: session.id },
+          data: { lastSync: new Date() }
+        });
+
+        return json({ 
+          success: true,
+          message: "Inventario actualizado correctamente",
+          data: {
+            sku,
+            quantity,
+            locationId: session.shipeuLocationId,
+            inventoryItemId: variant.inventoryItem.id,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+
       return json({ 
         error: "No se pudo confirmar la actualización",
         details: "La respuesta de Shopify no incluye la confirmación esperada",
