@@ -25,21 +25,21 @@ export async function action({ request }) {
                 request.headers.get('Authorization')?.replace("Bearer ", "");
 
   if (!apiKey) {
-    return json({ error: 'Se requiere clave API' }, { status: 401 });
+    return json({ error: 'API key required' }, { status: 401 });
   }
   
   try {
     const session = await verificarApiKey(apiKey);
     
     if (!session) {
-      return json({ error: 'Clave API inválida o expirada' }, { status: 401 });
+      return json({ error: 'Invalid or expired API key' }, { status: 401 });
     }
 
     // Verificar si la última actualización fue muy reciente (menos de 5 segundos)
     if (session.lastSync && (new Date() - new Date(session.lastSync)) < 5000) {
       return json({ 
-        error: "Actualización ignorada",
-        details: "Se detectó una actualización reciente, evitando duplicados",
+        error: "Update ignored",
+        details: "Recent update detected, avoiding duplicates",
         debug: {
           lastSync: session.lastSync,
           timeSinceLastSync: new Date() - new Date(session.lastSync)
@@ -49,8 +49,8 @@ export async function action({ request }) {
 
     if (!session.shipeuLocationId) {
       return json({ 
-        error: "Configuración incompleta",
-        details: "No hay locationId configurado para esta sesión",
+        error: "Incomplete configuration",
+        details: "No locationId configured for this session",
         debug: {
           session: {
             shop: session.shop,
@@ -63,7 +63,7 @@ export async function action({ request }) {
     const { sku, quantity } = await request.json();
     
     if (!sku || quantity === undefined) {
-      return json({ error: "Faltan parámetros requeridos" }, { status: 400 });
+      return json({ error: "Missing required parameters" }, { status: 400 });
     }
 
     // Autenticar con admin usando las credenciales de la sesión
@@ -122,7 +122,7 @@ export async function action({ request }) {
 
     if (searchData.errors) {
       return json({ 
-        error: "Error consultando el producto en Shopify",
+        error: "Error querying product in Shopify",
         details: searchData.errors[0].message
       }, { status: 400 });
     }
@@ -165,7 +165,7 @@ export async function action({ request }) {
       
       return json({ 
         success: true,
-        message: "Stock ya actualizado",
+        message: "Stock already updated",
         data: {
           sku,
           quantity,
@@ -216,7 +216,7 @@ export async function action({ request }) {
     // Verificar errores de GraphQL primero
     if (updateData.errors) {
       return json({ 
-        error: "Error en la mutación de Shopify",
+        error: "Shopify mutation error",
         details: updateData.errors[0].message,
         debug: {
           errors: updateData.errors,
@@ -241,7 +241,7 @@ export async function action({ request }) {
     if (updateData.data?.inventorySetQuantities?.userErrors?.length > 0) {
       const userError = updateData.data.inventorySetQuantities.userErrors[0];
       return json({ 
-        error: "Error de validación en Shopify",
+        error: "Shopify validation error",
         details: userError.message,
         debug: {
           userErrors: updateData.data.inventorySetQuantities.userErrors,
@@ -274,7 +274,7 @@ export async function action({ request }) {
 
         return json({ 
           success: true,
-          message: "Inventario actualizado correctamente",
+          message: "Inventory updated successfully",
           data: {
             sku,
             quantity,
@@ -286,8 +286,8 @@ export async function action({ request }) {
       }
 
       return json({ 
-        error: "No se pudo confirmar la actualización",
-        details: "La respuesta de Shopify no incluye la confirmación esperada",
+        error: "Could not confirm update",
+        details: "Shopify response does not include expected confirmation",
         debug: {
           response: updateData,
           session: {
@@ -316,7 +316,7 @@ export async function action({ request }) {
     // Respuesta exitosa
     return json({ 
       success: true,
-      message: "Inventario actualizado correctamente",
+      message: "Inventory updated successfully",
       data: {
         sku,
         quantity,
@@ -328,9 +328,9 @@ export async function action({ request }) {
     });
 
   } catch (error) {
-    console.error("Error actualizando inventario:", error);
+    console.error("Error updating inventory:", error);
     return json({ 
-      error: "Error interno del servidor",
+      error: "Internal server error",
       details: error.message 
     }, { status: 500 });
   }

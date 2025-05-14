@@ -62,64 +62,64 @@ export default function Index() {
   const features = [
     {
       icon: OrderIcon,
-      title: "Envíos Nacionales e Internacionales",
-      description: "Gestiona envíos a cualquier parte del mundo con las mejores tarifas del mercado."
+      title: "National and International Shipping",
+      description: "Manage shipments anywhere in the world with the best market rates."
     },
     {
       icon: OrderFulfilledIcon,
-      title: "Gestión de Pedidos",
-      description: "Automatiza la gestión de tus pedidos y reduce errores en el proceso de envío."
+      title: "Order Management",
+      description: "Automate your order management and reduce errors in the shipping process."
     },
     {
       icon: OrdersStatusIcon,
-      title: "Seguimiento en Tiempo Real",
-      description: "Mantén informados a tus clientes con actualizaciones en tiempo real del estado de sus envíos."
+      title: "Real-Time Tracking",
+      description: "Keep your customers informed with real-time updates on their shipment status."
     },
     {
       icon: InventoryUpdatedIcon,
-      title: "Sincronización de Inventario",
-      description: "Mantén tu inventario siempre actualizado y sincronizado entre Shopify y Shipeu."
+      title: "Inventory Synchronization",
+      description: "Keep your inventory always updated and synchronized between Shopify and Shipeu."
     }
   ];
 
   const reasons = [
     {
       icon: ConnectIcon,
-      title: "Integración perfecta",
-      description: "Conecta tu tienda Shopify de manera rápida y sencilla, sin complicaciones técnicas."
+      title: "Perfect Integration",
+      description: "Connect your Shopify store quickly and easily, without technical complications."
     },
     {
       icon: MoneyIcon,
-      title: "Mejores tarifas",
-      description: "Obtén las tarifas más competitivas del mercado para tus envíos nacionales e internacionales."
+      title: "Best Rates",
+      description: "Get the most competitive market rates for your national and international shipments."
     },
     {
       icon: QuestionCircleIcon,
-      title: "Soporte especializado",
-      description: "Cuenta con un equipo técnico dedicado para resolver todas tus dudas y necesidades."
+      title: "Specialized Support",
+      description: "Count on a dedicated technical team to solve all your doubts and needs."
     },
     {
       icon: CheckCircleIcon,
-      title: "Panel intuitivo",
-      description: "Gestiona tus envíos desde una interfaz fácil de usar y diseñada pensando en ti."
+      title: "Intuitive Panel",
+      description: "Manage your shipments from an easy-to-use interface designed with you in mind."
     }
   ];
 
   return (
-    <Page title="Bienvenido a Shipeu" fullWidth>
+    <Page title="Welcome to Shipeu" fullWidth>
       <BlockStack gap="500" padding="500">
         <Layout>
           {needsConfiguration && (
             <Layout.Section>
               <Banner
-                title="Configuración pendiente"
+                title="Pending Configuration"
                 status="warning"
                 action={{
-                  content: "Configurar ahora",
+                  content: "Set up now",
                   onAction: () => navigate("/app/shipeu-sync")
                 }}
               >
-                <p>Para comenzar a disfrutar de todos los beneficios de Shipeu, necesitas completar la configuración de tu tienda.</p>
+                <p>To start enjoying all the benefits of Shipeu, you need to complete your store setup.</p>
               </Banner>
             </Layout.Section>
           )}
@@ -129,22 +129,22 @@ export default function Index() {
                 <div style={{ textAlign: 'center', maxWidth: '800px', margin: '0 auto' }}>
                   <BlockStack gap="400" align="center">
                     <Text as="h2" variant="headingXl" color="success">
-                      Optimiza tu logística con Shipeu
+                      Optimize your logistics with Shipeu
                     </Text>
                     <Text as="p" variant="bodyLg" color="subdued" alignment="center">
-                      Simplifica tus envíos y mejora la experiencia de tus clientes con nuestra solución integral de logística.
+                      Simplify your shipments and improve your customers' experience with our comprehensive logistics solution.
                     </Text>
                     {!needsConfiguration && (
                       <BlockStack gap="400" align="center">
                         <Text as="p" variant="bodyMd" alignment="center">
-                          Tu tienda <strong>{shop}</strong> está correctamente configurada con Shipeu y lista para gestionar envíos.
+                          Your store <strong>{shop}</strong> is correctly configured with Shipeu and ready to manage shipments.
                         </Text>
                         <InlineStack gap="300" align="center">
                           <Button primary size="large" onClick={() => navigate("/app/shipeu-sync")}>
-                            Gestionar configuración
+                            Manage settings
                           </Button>
                           <Button size="large" onClick={() => window.open("https://docs.shipeu.com/shipeu-control/", "_blank")}>
-                            Ver documentación
+                            View documentation
                           </Button>
                         </InlineStack>
                       </BlockStack>
@@ -161,7 +161,7 @@ export default function Index() {
                 <Box padding="500">
                   <BlockStack gap="400">
                     <Text as="h3" variant="headingLg" alignment="center" color="success">
-                      Características principales
+                      Main Features
                     </Text>
 
                     <div style={{
@@ -206,7 +206,7 @@ export default function Index() {
               <Box padding="500" paddingBlockEnd="800">
                 <BlockStack gap="400">
                   <Text as="h3" variant="headingLg" alignment="center" color="success">
-                    ¿Por qué elegir Shipeu?
+                    Why choose Shipeu?
                   </Text>
                   <div style={{
                     display: 'grid',

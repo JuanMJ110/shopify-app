@@ -127,13 +127,13 @@ async function obtenerOrdenes(accessToken, shop, financialStatus = "any", status
     });
 
     if (!response.ok) {
-      throw new Error(`Error en la respuesta de Shopify: ${response.statusText}`);
+      throw new Error(`Error in Shopify response: ${response.statusText}`);
     }
 
     const result = await response.json();
     return result;
   } catch (error) {
-    console.error("Error al obtener órdenes de Shopify:", error);
+    console.error("Error fetching Shopify orders:", error);
     throw error;
   }
 }
@@ -149,14 +149,14 @@ export async function loader({ request }) {
   const fulfillmentStatus = url.searchParams.get('fulfillment_status') || 'any';
 
   if (!apiKey) {
-    return json({ error: 'Se requiere clave API' }, { status: 401 });
+    return json({ error: 'API key required' }, { status: 401 });
   }
 
   try {
     const session = await verificarApiKey(apiKey);
 
     if (!session) {
-      return json({ error: 'Clave API inválida o expirada' }, { status: 401 });
+      return json({ error: 'Invalid or expired API key' }, { status: 401 });
     }
 
     const data = await obtenerOrdenes(session.accessToken, session.shop, financialStatus, status, fulfillmentStatus);
@@ -241,7 +241,7 @@ export async function loader({ request }) {
     return json({ success: true, orders });
 
   } catch (error) {
-    console.error("Error al procesar solicitud:", error);
+    console.error("Error processing request:", error);
     return json({
       success: false,
       error: error.message

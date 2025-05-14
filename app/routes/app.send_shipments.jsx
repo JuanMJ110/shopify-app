@@ -24,7 +24,7 @@ export async function action({ request }) {
                 request.headers.get('Authorization')?.replace("Bearer ", "");
 
   if (!apiKey) {
-    return json({ error: 'Se requiere clave API' }, { status: 401 });
+    return json({ error: 'API key required' }, { status: 401 });
   }
   
   try {
@@ -32,13 +32,13 @@ export async function action({ request }) {
     const session = await verificarApiKey(apiKey);
     
     if (!session) {
-      return json({ error: 'Clave API inválida o expirada' }, { status: 401 });
+      return json({ error: 'Invalid or expired API key' }, { status: 401 });
     }
 
     const { orderId, locationId, trackingNumber, trackingUrl } = await request.json();
     
     if (!orderId || !locationId || !trackingNumber || !trackingUrl) {
-      return json({ error: "Faltan parámetros requeridos" }, { status: 400 });
+      return json({ error: "Missing required parameters" }, { status: 400 });
     }
 
     // Autenticar con admin usando las credenciales de la sesión
@@ -134,7 +134,7 @@ export async function action({ request }) {
       return json(
         {
           success: false,
-          error: "Error en la consulta GraphQL",
+          error: "GraphQL query error",
           details: responseJson.errors,
         },
         { status: 400 }
@@ -146,7 +146,7 @@ export async function action({ request }) {
       return json(
         {
           success: false,
-          error: "No se encontró la orden",
+          error: "Order not found",
         },
         { status: 404 }
       );
@@ -154,11 +154,11 @@ export async function action({ request }) {
 
     const fulfillmentOrder = order.fulfillmentOrders.edges[0]?.node;
     if (!fulfillmentOrder) {
-      console.warn(`La orden ${order.name} no tiene órdenes de cumplimiento`);
+      console.warn(`Order ${order.name} has no fulfillment orders`);
       return json(
         {
           success: false,
-          error: `La orden ${order.name} no tiene órdenes de cumplimiento`,
+          error: `Order ${order.name} has no fulfillment orders`,
         },
         { status: 400 }
       );
@@ -187,7 +187,7 @@ export async function action({ request }) {
       const moveResult = await moveResponse.json();
       if (moveResult.errors || moveResult.data?.fulfillmentOrderMove?.userErrors?.length > 0) {
         throw new Error(
-          `Error moviendo la orden: ${JSON.stringify(
+          `Error moving order: ${JSON.stringify(
             moveResult.errors || moveResult.data.fulfillmentOrderMove.userErrors
           )}`
         );
@@ -224,7 +224,7 @@ export async function action({ request }) {
     const fulfillmentResult = await fulfillmentResponse.json();
     if (fulfillmentResult.errors || fulfillmentResult.data?.fulfillmentCreateV2?.userErrors?.length > 0) {
       throw new Error(
-        `Error creando el cumplimiento: ${JSON.stringify(
+        `Error creating fulfillment: ${JSON.stringify(
           fulfillmentResult.errors || fulfillmentResult.data.fulfillmentCreateV2.userErrors
         )}`
       );
