@@ -41,3 +41,19 @@ model Session {
   @@unique([shop, apiKey])
   @@index([shipeuStatus])
 }
+
+model WebhookQueue {
+  id          String    @id @default(uuid())
+  shop        String
+  topic       String
+  payload     String    // Almacenaremos el JSON como string
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  error       String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  
+  @@index([shop])
+  @@index([status])
+  @@index([createdAt])
+}

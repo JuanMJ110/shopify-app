@@ -2,33 +2,37 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { v4 as uuidv4 } from 'uuid';
 
-// Cola simple en memoria
-const webhookQueue = [];
-let webhookProcessing = false;
-
 // Agregar un Set para tracking de webhooks procesados
 const processedWebhooks = new Set();
 
 async function processWebhookQueue() {
-  if (webhookProcessing) return;
-  webhookProcessing = true;
   try {
-    while (webhookQueue.length > 0) {
-      const { id, request, resolve, body } = webhookQueue.shift();
-      
-      // Crear una clave única para el webhook
-      const webhookKey = `${body.sku}-${body.operation}-${Date.now()}`;
+    // Obtener webhooks pendientes de la BD
+    const pendingWebhooks = await prisma.webhookQueue.findMany({
+      where: {
+        status: 'pending'
+      },
+      orderBy: {
+        createdAt: 'asc'
+      },
+      take: 10 // Procesar en lotes para evitar sobrecargar el sistema
+    });
+
+    for (const webhook of pendingWebhooks) {
+      // Crear una clave única para el webhook usando el ID de la BD
+      const webhookKey = `${webhook.id}`;
       
       // Verificar si ya fue procesado recientemente (dentro de los últimos 5 minutos)
       if (processedWebhooks.has(webhookKey)) {
-        resolve(new Response(
-          JSON.stringify({
-            status: "ignored",
-            reason: "duplicate_webhook",
-            timestamp: new Date().toISOString()
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        ));
+        // Este caso podría ocurrir si el worker se reinicia antes de actualizar el estado a 'ignored'
+        // Lo marcamos como error para investigación si es necesario
+        await prisma.webhookQueue.update({
+          where: { id: webhook.id },
+          data: { 
+            status: 'error',
+            error: JSON.stringify({ reason: 'duplicate_processing_attempt' })
+          }
+        });
         continue;
       }
 
@@ -40,35 +44,235 @@ async function processWebhookQueue() {
         processedWebhooks.delete(webhookKey);
       }, 5 * 60 * 1000);
 
-      // Filtra duplicados ANTES de procesar la petición actual
-      for (let i = webhookQueue.length - 1; i >= 0; i--) {
-        const item = webhookQueue[i];
-        if (item.body.sku === body.sku && item.body.operation === body.operation) {
-          webhookQueue.splice(i, 1); // Elimina duplicados
-        }
+      let parsedPayload;
+      try {
+        parsedPayload = JSON.parse(webhook.payload);
+      } catch (parseError) {
+        await prisma.webhookQueue.update({
+          where: { id: webhook.id },
+          data: { 
+            status: 'error',
+            error: JSON.stringify({ message: 'Failed to parse payload', details: parseError.message })
+          }
+        });
+        continue;
       }
 
       try {
-        // Clonar la request antes de procesarla
-        const requestToProcess = request.clone();
-        const result = await processWebhookRequest(requestToProcess);
-        resolve(result);
-        // Esperar 2 segundos antes de procesar el siguiente webhook
+        // Obtener la sesión de la tienda
+        const session = await prisma.session.findFirst({
+          where: { 
+            shop: webhook.shop
+          },
+          orderBy: {
+            createdAt: 'desc'
+          }
+        });
+
+        if (!session) {
+          await prisma.webhookQueue.update({
+            where: { id: webhook.id },
+            data: { 
+              status: 'error',
+              error: JSON.stringify({ message: 'No session found for shop' })
+            }
+          });
+          continue;
+        }
+
+        // Crear cliente admin usando la sesión
+        const admin = {
+          graphql: async (query, options = {}) => {
+            const shopifyDomain = `https://${session.shop}`;
+            const url = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
+            
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Shopify-Access-Token': session.accessToken
+              },
+              body: JSON.stringify({ 
+                query,
+                variables: options.variables
+              })
+            });
+
+            return response;
+          }
+        };
+
+        let itemDetails = null;
+        let shipeuOperation = '';
+        let shipeuData = {};
+
+        // Procesar el webhook según su tipo
+        if (webhook.topic === 'inventory_levels_update') {
+          shipeuOperation = 'update_quantity';
+          const { inventory_item_id, available, location_id } = parsedPayload;
+
+          // Verificar si es la ubicación correcta (re-check por si no se filtró en action)
+           if (location_id && !isRelevantLocation(location_id, session.shipeuLocationId)) {
+              await prisma.webhookQueue.update({
+                where: { id: webhook.id },
+                data: { 
+                  status: 'ignored',
+                  error: JSON.stringify({
+                    reason: "location_mismatch",
+                    received_location: location_id,
+                    configured_location: session.shipeuLocationId
+                  })
+                }
+              });
+              continue;
+            }
+
+          itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
+          
+          if (!itemDetails?.sku) {
+            await prisma.webhookQueue.update({
+              where: { id: webhook.id },
+              data: { 
+                status: 'error',
+                error: JSON.stringify({ 
+                  reason: 'no_sku_found',
+                  case: 'inventory_levels_update',
+                  inventoryItem: itemDetails,
+                  inventory_item_id,
+                  payload: parsedPayload
+                })
+              }
+            });
+            continue;
+          }
+
+          shipeuData = {
+            sku: itemDetails.sku,
+            new_quantity: available,
+            product_title: itemDetails.variant?.product?.title,
+            variant_title: itemDetails.variant?.title,
+            price: itemDetails.variant?.price,
+            inventory_item_id,
+            location_id
+          };
+
+        } else if (webhook.topic === 'inventory_items_create') {
+          shipeuOperation = 'create_product';
+          const { id, sku } = parsedPayload;
+
+          if (!sku) {
+             await prisma.webhookQueue.update({
+              where: { id: webhook.id },
+              data: { 
+                status: 'error',
+                error: JSON.stringify({
+                  reason: 'no_sku_provided',
+                  case: 'inventory_items_create',
+                  inventory_item_id: id,
+                  payload: parsedPayload
+                })
+              }
+            });
+            continue;
+          }
+
+          itemDetails = await getInventoryItemDetails(admin, id);
+
+          shipeuData = {
+            sku,
+            inventory_item_id: id,
+            product_title: itemDetails.variant?.product?.title,
+            variant_title: itemDetails.variant?.title,
+            price: itemDetails.variant?.price,
+            vendor: itemDetails.variant?.product?.vendor,
+            product_status: itemDetails.variant?.product?.status,
+            tracked: itemDetails.tracked
+          };
+        } else {
+             // Tema no manejado, marcar como completado/ignorado
+             await prisma.webhookQueue.update({
+              where: { id: webhook.id },
+              data: { 
+                status: 'ignored',
+                error: JSON.stringify({ reason: 'unhandled_topic', topic: webhook.topic })
+              }
+            });
+            continue;
+        }
+
+        // Enviar a Shipeu si se determinó una operación
+        if (shipeuOperation) {
+            let syncResult;
+            let shipeuResponse = null;
+            let shipeuRequest = { sellerId: session.shipeuId, operation: shipeuOperation, data: shipeuData };
+
+            try {
+              syncResult = await syncWithShipeu(shipeuRequest);
+              shipeuResponse = await syncResult.json();
+
+              if (syncResult.status === 200) {
+                await prisma.webhookQueue.update({
+                  where: { id: webhook.id },
+                  data: { 
+                    status: 'completed',
+                    processedAt: new Date(),
+                    error: JSON.stringify({ message: 'Successfully processed', request: shipeuRequest, response: shipeuResponse })
+                  }
+                });
+              } else {
+                 // Manejar errores de Shipeu API
+                await prisma.webhookQueue.update({
+                  where: { id: webhook.id },
+                  data: { 
+                    status: 'error',
+                    error: JSON.stringify({
+                      message: `Shipeu sync failed: ${syncResult.status}`,
+                      statusCode: syncResult.status,
+                      response: shipeuResponse,
+                      request: shipeuRequest
+                    }),
+                    processedAt: new Date(),
+                  }
+                });
+              }
+
+            } catch (syncError) {
+               // Manejar errores de la llamada fetch (red, parseo, etc.)
+               let errorDetails = { message: syncError.message };
+               if (process.env.NODE_ENV === "development") errorDetails.stack = syncError.stack;
+
+               await prisma.webhookQueue.update({
+                 where: { id: webhook.id },
+                 data: { 
+                   status: 'error',
+                   error: JSON.stringify({ message: 'Shipeu sync failed', details: errorDetails, request: shipeuRequest, response: shipeuResponse }),
+                   processedAt: new Date(),
+                 }
+               });
+            }
+        }
+
+        // Esperar 2 segundos antes de procesar el siguiente webhook para evitar saturar Shopify/Shipeu
         await new Promise(r => setTimeout(r, 2000));
-      } catch (err) {
-        resolve(new Response(
-          JSON.stringify({
-            status: "error",
-            error: "Queue processing error",
-            details: err.message,
-            timestamp: new Date().toISOString()
-          }, null, 2),
-          { status: 500, headers: { "Content-Type": "application/json" } }
-        ));
+
+      } catch (processingError) {
+        // Manejar errores generales durante el procesamiento (obtener item details, etc.)
+        let errorDetails = { message: processingError.message };
+        if (process.env.NODE_ENV === "development") errorDetails.stack = processingError.stack;
+
+        await prisma.webhookQueue.update({
+          where: { id: webhook.id },
+          data: { 
+            status: 'error',
+            error: JSON.stringify({ message: 'Webhook processing failed', details: errorDetails }),
+            processedAt: new Date()
+          }
+        });
       }
     }
-  } finally {
-    webhookProcessing = false;
+  } catch (queueError) {
+    console.error('Error fetching or iterating webhook queue:', queueError);
+    // Considerar agregar logging o notificación si esta parte falla consistentemente
   }
 }
 
@@ -170,9 +374,9 @@ function isRelevantLocation(locationId, configuredLocationId) {
   return normalizedConfigured === normalizedReceived;
 }
 
-async function processWebhookRequest(request) {
+export const action = async ({ request }) => {
   try {
-    const { shop, admin, topic, payload } = await authenticate.webhook(request);
+    const { shop, topic, payload } = await authenticate.webhook(request);
 
     // Normalizar el topic a minúsculas y formato estándar
     const normalizedTopic = topic.toLowerCase();
@@ -184,14 +388,6 @@ async function processWebhookRequest(request) {
       },
       orderBy: {
         createdAt: 'desc'
-      },
-      select: {
-        id: true,
-        shop: true,
-        shipeuLocationId: true,
-        shipeuId: true,
-        createdAt: true,
-        updatedAt: true
       }
     });
 
@@ -228,227 +424,32 @@ async function processWebhookRequest(request) {
       );
     }
 
-    // Manejar cada tipo de evento por separado usando el topic normalizado
-    switch (normalizedTopic) {
-      case "inventory_levels_update": {
-        const { inventory_item_id, available, location_id } = payload;
-
-        // Verificar si es la ubicación correcta
-        const normalizedConfiguredLocation = extractLocationId(existingSession.shipeuLocationId);
-        const normalizedReceivedLocation = parseInt(location_id, 10);
-
-        if (normalizedConfiguredLocation !== normalizedReceivedLocation) {
-          return new Response(
-            JSON.stringify({
-              status: "ignored",
-              reason: "location_mismatch",
-              received_location: normalizedReceivedLocation,
-              configured_location: parseInt(normalizedConfiguredLocation, 10),
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
-
-        // Obtener detalles del item incluyendo SKU
-        const itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
-        
-        if (!itemDetails?.sku) {
-          return new Response(
-            JSON.stringify({
-              status: "error",
-              reason: "no_sku_found",
-              case: "inventory_levels_update",
-              inventoryItem: itemDetails,
-              inventory_item_id,
-              payload: payload,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
-
-        // Enviar a Shipeu
-        let syncResult;
-        try {
-          syncResult = await syncWithShipeu({
-            sellerId: existingSession.shipeuId,
-            operation: "update_quantity",
-            data: {
-              sku: itemDetails.sku,
-              new_quantity: available,
-              product_title: itemDetails.variant?.product?.title,
-              variant_title: itemDetails.variant?.title,
-              price: itemDetails.variant?.price,
-              inventory_item_id,
-              location_id
-            }
-          });
-        } catch (error) {
-          // Maneja el error de reintentos aquí
-          return new Response(
-            JSON.stringify({
-              status: "error",
-              error: error.message,
-              details: error.details,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { status: 500, headers: { "Content-Type": "application/json" } }
-          );
-        }
-
-        if (syncResult.status === 200) {
-          return new Response(
-            JSON.stringify({
-              status: "success",
-              operation: "update_quantity",
-              data: {
-                sku: itemDetails.sku,
-                new_quantity: available,
-                product_title: itemDetails.variant?.product?.title,
-                variant_title: itemDetails.variant?.title,
-                price: itemDetails.variant?.price,
-                inventory_item_id,
-                location_id
-              },
-              payload: payload,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        } else {
-          return new Response(
-            JSON.stringify({
-              status: syncResult.status,
-              source: syncResult.source,
-              message: syncResult.message,
-              receivedData: syncResult.receivedData,
-              error: syncResult.error,
-              payload: payload,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
+    // Guardar el webhook en la BD
+    await prisma.webhookQueue.create({
+      data: {
+        id: uuidv4(),
+        shop,
+        topic: normalizedTopic,
+        payload: JSON.stringify(payload),
+        status: 'pending',
+        // Los campos específicos del payload se extraen en processWebhookQueue
       }
+    });
 
-      case "inventory_items_create": {
-        const { id, sku } = payload;
-        
-        if (!sku) {
-          return new Response(
-            JSON.stringify({
-              status: "error",
-              reason: "no_sku_provided",
-              case: "inventory_items_create",
-              inventory_item_id: id,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
+    // Iniciar el procesamiento de la cola
+    processWebhookQueue();
 
-        // Obtener detalles adicionales del producto
-        const itemDetails = await getInventoryItemDetails(admin, id);
-
-        // Enviar a Shipeu SOLO con retry en la llamada externa
-        let syncResult;
-        try {
-          syncResult = await syncWithShipeu({
-            sellerId: existingSession.shipeuId,
-            operation: "create_product",
-            data: {
-              sku,
-              inventory_item_id: id,
-              product_title: itemDetails.variant?.product?.title,
-              variant_title: itemDetails.variant?.title,
-              price: itemDetails.variant?.price,
-              vendor: itemDetails.variant?.product?.vendor,
-              product_status: itemDetails.variant?.product?.status,
-              tracked: itemDetails.tracked
-            }
-          });
-        } catch (error) {
-          return new Response(
-            JSON.stringify({
-              status: "error",
-              error: error.message,
-              details: error.details,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { status: 500, headers: { "Content-Type": "application/json" } }
-          );
-        }
-
-        if (syncResult.status === 200) {
-          return new Response(
-            JSON.stringify({
-              status: "success",
-              operation: "create_product",
-              data: {
-                sku,
-                inventory_item_id: id,
-                product_title: itemDetails.variant?.product?.title,
-                variant_title: itemDetails.variant?.title,
-                price: itemDetails.variant?.price,
-                vendor: itemDetails.variant?.product?.vendor,
-                product_status: itemDetails.variant?.product?.status,
-                tracked: itemDetails.tracked
-              },
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        } else {
-          return new Response(
-            JSON.stringify({
-              status: syncResult.status,
-              source: syncResult.source,
-              message: syncResult.message,
-              receivedData: syncResult.receivedData,
-              error: syncResult.error,
-              timestamp: new Date().toISOString()
-            }, null, 2),
-            { 
-              status: 200,
-              headers: { "Content-Type": "application/json" }
-            }
-          );
-        }
+    return new Response(
+      JSON.stringify({
+        status: "queued",
+        topic: normalizedTopic,
+        timestamp: new Date().toISOString()
+      }, null, 2),
+      { 
+        status: 200,
+        headers: { "Content-Type": "application/json" }
       }
-
-      default:
-        return new Response(
-          JSON.stringify({
-            status: "received",
-            topic,
-            timestamp: new Date().toISOString()
-          }, null, 2),
-          { 
-            status: 200,
-            headers: { "Content-Type": "application/json" }
-          }
-        );
-    }
-
+    );
   } catch (error) {
     return new Response(
       JSON.stringify({
@@ -463,17 +464,4 @@ async function processWebhookRequest(request) {
       }
     );
   }
-}
-
-export const action = async ({ request }) => {
-  const id = uuidv4();
-  // Clonar la request antes de leer el body
-  const clonedRequest = request.clone();
-  const body = await clonedRequest.json();
-  
-  return new Promise((resolve) => {
-    // Pasar la request original a la cola
-    webhookQueue.push({ id, request, resolve, body });
-    processWebhookQueue();
-  });
 }; 
