@@ -1,20 +1,21 @@
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { verifyApiKey } from "../utils/auth.server.js";
 
 // Función para verificar la clave API
-async function verificarApiKey(apiKey) {
-  if (!apiKey) return null;
-  
-  const session = await prisma.session.findFirst({
-    where: {
-      apiKey,
-      // shipeuStatus: "active"
-    }
-  });
-  
-  return session;
-}
+// async function verificarApiKey(apiKey) {  // <--- Eliminada
+//   if (!apiKey) return null;
+//   
+//   const session = await prisma.session.findFirst({
+//     where: {
+//       apiKey,
+//       // shipeuStatus: "active"
+//     }
+//   });
+//   
+//   return session;
+// }
 
 export async function action({ request }) {
   // Verificar API key
@@ -29,7 +30,7 @@ export async function action({ request }) {
   
   try {
     // Verificar la clave API y obtener la sesión asociada
-    const session = await verificarApiKey(apiKey);
+    const session = await verifyApiKey(apiKey);
     
     if (!session) {
       return json({ error: 'Invalid or expired API key' }, { status: 401 });

@@ -1,25 +1,75 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { v4 as uuidv4 } from 'uuid';
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000; // 1 segundo
+// Cola simple en memoria
+const webhookQueue = [];
+let webhookProcessing = false;
 
-async function retryOperation(operation, maxRetries = MAX_RETRIES) {
-  let lastError;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (error.status === 429) { // Rate limit
-        const retryAfter = error.headers?.get('Retry-After') || RETRY_DELAY;
-        await new Promise(resolve => setTimeout(resolve, retryAfter));
-      } else if (i < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, i)));
+// Agregar un Set para tracking de webhooks procesados
+const processedWebhooks = new Set();
+
+async function processWebhookQueue() {
+  if (webhookProcessing) return;
+  webhookProcessing = true;
+  try {
+    while (webhookQueue.length > 0) {
+      const { id, request, resolve, body } = webhookQueue.shift();
+      
+      // Crear una clave única para el webhook
+      const webhookKey = `${body.sku}-${body.operation}-${Date.now()}`;
+      
+      // Verificar si ya fue procesado recientemente (dentro de los últimos 5 minutos)
+      if (processedWebhooks.has(webhookKey)) {
+        resolve(new Response(
+          JSON.stringify({
+            status: "ignored",
+            reason: "duplicate_webhook",
+            timestamp: new Date().toISOString()
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ));
+        continue;
+      }
+
+      // Agregar a procesados
+      processedWebhooks.add(webhookKey);
+      
+      // Limpiar webhooks antiguos (más de 5 minutos)
+      setTimeout(() => {
+        processedWebhooks.delete(webhookKey);
+      }, 5 * 60 * 1000);
+
+      // Filtra duplicados ANTES de procesar la petición actual
+      for (let i = webhookQueue.length - 1; i >= 0; i--) {
+        const item = webhookQueue[i];
+        if (item.body.sku === body.sku && item.body.operation === body.operation) {
+          webhookQueue.splice(i, 1); // Elimina duplicados
+        }
+      }
+
+      try {
+        // Clonar la request antes de procesarla
+        const requestToProcess = request.clone();
+        const result = await processWebhookRequest(requestToProcess);
+        resolve(result);
+        // Esperar 2 segundos antes de procesar el siguiente webhook
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (err) {
+        resolve(new Response(
+          JSON.stringify({
+            status: "error",
+            error: "Queue processing error",
+            details: err.message,
+            timestamp: new Date().toISOString()
+          }, null, 2),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        ));
       }
     }
+  } finally {
+    webhookProcessing = false;
   }
-  throw lastError;
 }
 
 function validatePayload(payload, topic) {
@@ -99,104 +149,18 @@ async function getInventoryItemDetails(admin, inventoryItemId) {
 }
 
 async function syncWithShipeu({ sellerId, operation, data }) {
-  return retryOperation(async () => {
-    const response = await fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        sellerId,
-        operation,
-        ...data
-      })
-    });
-
-    const responseText = await response.text();
-    
-    // Verificar si la respuesta es HTML
-    if (responseText.trim().startsWith('<!DOCTYPE html>')) {
-      const error = new Error('Received HTML response instead of JSON');
-      error.details = {
-        success: false,
-        status: 'error',
-        source: 'shipeu',
-        message: 'Received HTML response instead of JSON',
-        receivedData: {
-          sellerId,
-          operation,
-          ...data
-        },
-        error: {
-          status: response.status,
-          response: responseText
-        }
-      };
-      throw error;
-    }
-
-    try {
-      const jsonResponse = JSON.parse(responseText);
-      
-      // Verificar si la respuesta es un error de validación
-      if (response.status >= 400) {
-        const error = new Error(jsonResponse.message || 'Error from Shipeu API');
-        error.details = {
-          success: false,
-          status: 'error',
-          source: 'shipeu',
-          message: jsonResponse.message || 'Error from Shipeu API',
-          receivedData: {
-            sellerId,
-            operation,
-            ...data
-          },
-          error: {
-            status: response.status,
-            message: jsonResponse.message,
-            details: jsonResponse
-          }
-        };
-        throw error;
-      }
-
-      return {
-        success: true,
-        status: 'success',
-        source: 'shipeu',
-        message: 'Operation completed successfully',
-        receivedData: {
-          sellerId,
-          operation,
-          ...data
-        },
-        response: {
-          ...jsonResponse,
-          operation,
-          timestamp: new Date().toISOString()
-        }
-      };
-    } catch (parseError) {
-      const error = new Error(`Failed to parse JSON response: ${parseError.message}`);
-      error.details = {
-        success: false,
-        status: 'error',
-        source: 'shipeu',
-        message: 'Failed to parse JSON response',
-        receivedData: {
-          sellerId,
-          operation,
-          ...data
-        },
-        error: {
-          message: parseError.message,
-          response: responseText
-        }
-      };
-      throw error;
-    }
+  return fetch('http://localhost/shipeu/public/api/shopify/store/inventory', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer 08afb311-1009-45a9-923e-0c032a4676e2`,
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      sellerId,
+      operation,
+      ...data
+    })
   });
 }
 
@@ -206,7 +170,7 @@ function isRelevantLocation(locationId, configuredLocationId) {
   return normalizedConfigured === normalizedReceived;
 }
 
-export const action = async ({ request }) => {
+async function processWebhookRequest(request) {
   try {
     const { shop, admin, topic, payload } = await authenticate.webhook(request);
 
@@ -311,21 +275,35 @@ export const action = async ({ request }) => {
         }
 
         // Enviar a Shipeu
-        const syncResult = await syncWithShipeu({
-          sellerId: existingSession.shipeuId,
-          operation: "update_quantity",
-          data: {
-            sku: itemDetails.sku,
-            new_quantity: available,
-            product_title: itemDetails.variant?.product?.title,
-            variant_title: itemDetails.variant?.title,
-            price: itemDetails.variant?.price,
-            inventory_item_id,
-            location_id
-          }
-        });
+        let syncResult;
+        try {
+          syncResult = await syncWithShipeu({
+            sellerId: existingSession.shipeuId,
+            operation: "update_quantity",
+            data: {
+              sku: itemDetails.sku,
+              new_quantity: available,
+              product_title: itemDetails.variant?.product?.title,
+              variant_title: itemDetails.variant?.title,
+              price: itemDetails.variant?.price,
+              inventory_item_id,
+              location_id
+            }
+          });
+        } catch (error) {
+          // Maneja el error de reintentos aquí
+          return new Response(
+            JSON.stringify({
+              status: "error",
+              error: error.message,
+              details: error.details,
+              timestamp: new Date().toISOString()
+            }, null, 2),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
 
-        if (syncResult.success) {
+        if (syncResult.status === 200) {
           return new Response(
             JSON.stringify({
               status: "success",
@@ -388,23 +366,36 @@ export const action = async ({ request }) => {
         // Obtener detalles adicionales del producto
         const itemDetails = await getInventoryItemDetails(admin, id);
 
-        // Enviar a Shipeu
-        const syncResult = await syncWithShipeu({
-          sellerId: existingSession.shipeuId,
-          operation: "create_product",
-          data: {
-            sku,
-            inventory_item_id: id,
-            product_title: itemDetails.variant?.product?.title,
-            variant_title: itemDetails.variant?.title,
-            price: itemDetails.variant?.price,
-            vendor: itemDetails.variant?.product?.vendor,
-            product_status: itemDetails.variant?.product?.status,
-            tracked: itemDetails.tracked
-          }
-        });
+        // Enviar a Shipeu SOLO con retry en la llamada externa
+        let syncResult;
+        try {
+          syncResult = await syncWithShipeu({
+            sellerId: existingSession.shipeuId,
+            operation: "create_product",
+            data: {
+              sku,
+              inventory_item_id: id,
+              product_title: itemDetails.variant?.product?.title,
+              variant_title: itemDetails.variant?.title,
+              price: itemDetails.variant?.price,
+              vendor: itemDetails.variant?.product?.vendor,
+              product_status: itemDetails.variant?.product?.status,
+              tracked: itemDetails.tracked
+            }
+          });
+        } catch (error) {
+          return new Response(
+            JSON.stringify({
+              status: "error",
+              error: error.message,
+              details: error.details,
+              timestamp: new Date().toISOString()
+            }, null, 2),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
 
-        if (syncResult.success) {
+        if (syncResult.status === 200) {
           return new Response(
             JSON.stringify({
               status: "success",
@@ -472,4 +463,17 @@ export const action = async ({ request }) => {
       }
     );
   }
+}
+
+export const action = async ({ request }) => {
+  const id = uuidv4();
+  // Clonar la request antes de leer el body
+  const clonedRequest = request.clone();
+  const body = await clonedRequest.json();
+  
+  return new Promise((resolve) => {
+    // Pasar la request original a la cola
+    webhookQueue.push({ id, request, resolve, body });
+    processWebhookQueue();
+  });
 }; 

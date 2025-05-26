@@ -1,23 +1,63 @@
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { verifyApiKey } from "../utils/auth.server.js";
 
 // Función para verificar la clave API
-async function verificarApiKey(apiKey) {
-  if (!apiKey) return null;
-  
-  const session = await prisma.session.findFirst({
-    where: {
-      apiKey,
-      shipeuStatus: "active"
+// async function verificarApiKey(apiKey) { // <--- Eliminada
+//   if (!apiKey) return null;
+//   
+//   const session = await prisma.session.findFirst({
+//     where: {
+//       apiKey,
+//       shipeuStatus: "active"
+//     }
+//   });
+//   
+//   return session;
+// }
+
+// Cola simple en memoria
+const inventoryQueue = [];
+let processing = false;
+
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+  while (inventoryQueue.length > 0) {
+    const { id, request, resolve } = inventoryQueue.shift();
+    const body = await request.clone().json();
+    
+    // Elimina duplicados de la cola (excepto el que se está procesando)
+    const filteredQueue = inventoryQueue.filter(item => {
+      const itemBody = item.request.body ? JSON.parse(item.request.body) : {};
+      return (itemBody.sku !== body.sku) || item.id === id;
+    });
+    
+    // Actualiza la cola con los elementos filtrados
+    inventoryQueue.length = 0;
+    inventoryQueue.push(...filteredQueue);
+    
+    try {
+      const result = await processInventoryRequest(request);
+      resolve(result);
+      await new Promise(r => setTimeout(r, 1000)); // Espera 1 segundo
+    } catch (err) {
+      resolve(json({ error: "Queue processing error", details: err.message }, { status: 500 }));
     }
-  });
-  
-  return session;
+  }
+  processing = false;
 }
 
 export async function action({ request }) {
-  
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    inventoryQueue.push({ id, request, resolve });
+    processQueue();
+  });
+}
+
+async function processInventoryRequest(request) {
   // Verificar API key
   const url = new URL(request.url);
   const apiKey = url.searchParams.get('api_key') || 
@@ -29,14 +69,14 @@ export async function action({ request }) {
   }
   
   try {
-    const session = await verificarApiKey(apiKey);
+    const session = await verifyApiKey(apiKey, true);
     
     if (!session) {
       return json({ error: 'Invalid or expired API key' }, { status: 401 });
     }
 
     // Verificar si la última actualización fue muy reciente (menos de 5 segundos)
-    if (session.lastSync && (new Date() - new Date(session.lastSync)) < 5000) {
+    if (session.lastSync && (new Date() - new Date(session.lastSync)) < 1000) {
       return json({ 
         error: "Update ignored",
         details: "Recent update detected, avoiding duplicates",
@@ -66,6 +106,15 @@ export async function action({ request }) {
       return json({ error: "Missing required parameters" }, { status: 400 });
     }
 
+    // Convertir quantity a entero
+    const quantityInt = parseInt(quantity, 10);
+    if (isNaN(quantityInt)) {
+      return json({ 
+        error: "Invalid quantity format",
+        details: "Quantity must be a valid number"
+      }, { status: 400 });
+    }
+
     // Autenticar con admin usando las credenciales de la sesión
     const admin = {
       graphql: async (query, options = {}) => {
@@ -90,8 +139,8 @@ export async function action({ request }) {
 
     // 1. Buscar el producto por SKU y obtener su stock actual
     const searchResponse = await admin.graphql(
-      `query searchVariant($sku: String!, $locationId: ID!) {
-        productVariants(first: 1, query: $sku) {
+      `query searchVariant($locationId: ID!) {
+        productVariants(first: 10, query: "sku:${sku}") {
           edges {
             node {
               id
@@ -111,7 +160,6 @@ export async function action({ request }) {
       }`,
       {
         variables: {
-          sku: sku,
           locationId: session.shipeuLocationId
         }
       }
@@ -127,7 +175,17 @@ export async function action({ request }) {
       }, { status: 400 });
     }
 
-    const variant = searchData.data?.productVariants?.edges?.[0]?.node;
+    const variants = searchData.data?.productVariants?.edges || [];
+    const exactVariant = variants.find(v => v.node.sku === sku);
+    
+    if (!exactVariant) {
+      return json({ 
+        error: "Product not found",
+        details: "No variant found with the exact SKU"
+      }, { status: 404 });
+    }
+
+    const variant = exactVariant.node;
     
     // Obtener el nivel de inventario actual usando una consulta separada
     const inventoryResponse = await admin.graphql(
@@ -149,11 +207,11 @@ export async function action({ request }) {
     const currentStock = inventoryData.data?.inventoryLevel?.available || 0;
 
     // Verificar si el stock actual es igual al que queremos establecer
-    if (currentStock === quantity) {
+    if (currentStock === quantityInt) {
       console.log('Stock ya actualizado para la ubicación específica', {
         sku,
         currentStock,
-        newQuantity: quantity,
+        newQuantity: quantityInt,
         locationId: session.shipeuLocationId
       });
       
@@ -204,7 +262,7 @@ export async function action({ request }) {
             quantities: [{
               inventoryItemId: variant.inventoryItem.id,
               locationId: session.shipeuLocationId,
-              quantity: quantity
+              quantity: quantityInt
             }]
           }
         }

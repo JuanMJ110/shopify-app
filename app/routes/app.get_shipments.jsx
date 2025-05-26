@@ -1,18 +1,6 @@
 import { json } from "@remix-run/node";
 import prisma from "../db.server";
-
-async function verificarApiKey(apiKey) {
-  if (!apiKey) return null;
-
-  const session = await prisma.session.findFirst({
-    where: {
-      apiKey,
-      // shipeuStatus: "active"
-    }
-  });
-
-  return session;
-}
+import { verifyApiKey } from "../utils/auth.server.js";
 
 async function obtenerOrdenes(accessToken, shop, financialStatus = "any", status = "any") {
   const shopifyDomain = `https://${shop}`;
@@ -153,7 +141,7 @@ export async function loader({ request }) {
   }
 
   try {
-    const session = await verificarApiKey(apiKey);
+    const session = await verifyApiKey(apiKey);
 
     if (!session) {
       return json({ error: 'Invalid or expired API key' }, { status: 401 });
