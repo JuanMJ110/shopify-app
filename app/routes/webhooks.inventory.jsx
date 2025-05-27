@@ -219,6 +219,12 @@ async function processWebhookQueue() {
                     error: JSON.stringify({ message: 'Successfully processed', request: shipeuRequest, response: shipeuResponse })
                   }
                 });
+
+                // Eliminar el webhook de la cola de la BD después de procesar con éxito
+                await prisma.webhookQueue.delete({
+                  where: { id: webhook.id }
+                });
+
               } else {
                  // Manejar errores de Shipeu API
                 await prisma.webhookQueue.update({
