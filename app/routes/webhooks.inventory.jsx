@@ -1,286 +1,10 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { v4 as uuidv4 } from 'uuid';
+import { processWebhookQueue } from "../services/webhookProcessor.server";
 
 // Agregar un Set para tracking de webhooks procesados
 const processedWebhooks = new Set();
-
-async function processWebhookQueue() {
-  try {
-    // Obtener webhooks pendientes de la BD
-    const pendingWebhooks = await prisma.webhookQueue.findMany({
-      where: {
-        status: 'pending'
-      },
-      orderBy: {
-        createdAt: 'asc'
-      },
-      take: 10 // Procesar en lotes para evitar sobrecargar el sistema
-    });
-
-    for (const webhook of pendingWebhooks) {
-      // Crear una clave única para el webhook usando el ID de la BD
-      const webhookKey = `${webhook.id}`;
-      
-      // Verificar si ya fue procesado recientemente (dentro de los últimos 5 minutos)
-      if (processedWebhooks.has(webhookKey)) {
-        // Este caso podría ocurrir si el worker se reinicia antes de actualizar el estado a 'ignored'
-        // Lo marcamos como error para investigación si es necesario
-        await prisma.webhookQueue.update({
-          where: { id: webhook.id },
-          data: { 
-            status: 'error',
-            error: JSON.stringify({ reason: 'duplicate_processing_attempt' })
-          }
-        });
-        continue;
-      }
-
-      // Agregar a procesados
-      processedWebhooks.add(webhookKey);
-      
-      // Limpiar webhooks antiguos (más de 5 minutos)
-      setTimeout(() => {
-        processedWebhooks.delete(webhookKey);
-      }, 5 * 60 * 1000);
-
-      let parsedPayload;
-      try {
-        parsedPayload = JSON.parse(webhook.payload);
-      } catch (parseError) {
-        await prisma.webhookQueue.update({
-          where: { id: webhook.id },
-          data: { 
-            status: 'error',
-            error: JSON.stringify({ message: 'Failed to parse payload', details: parseError.message })
-          }
-        });
-        continue;
-      }
-
-      try {
-        // Obtener la sesión de la tienda
-        const session = await prisma.session.findFirst({
-          where: { 
-            shop: webhook.shop
-          },
-          orderBy: {
-            createdAt: 'desc'
-          }
-        });
-
-        if (!session) {
-          await prisma.webhookQueue.update({
-            where: { id: webhook.id },
-            data: { 
-              status: 'error',
-              error: JSON.stringify({ message: 'No session found for shop' })
-            }
-          });
-          continue;
-        }
-
-        // Crear cliente admin usando la sesión
-        const admin = {
-          graphql: async (query, options = {}) => {
-            const shopifyDomain = `https://${session.shop}`;
-            const url = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
-            
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Shopify-Access-Token': session.accessToken
-              },
-              body: JSON.stringify({ 
-                query,
-                variables: options.variables
-              })
-            });
-
-            return response;
-          }
-        };
-
-        let itemDetails = null;
-        let shipeuOperation = '';
-        let shipeuData = {};
-
-        // Procesar el webhook según su tipo
-        if (webhook.topic === 'inventory_levels_update') {
-          shipeuOperation = 'update_quantity';
-          const { inventory_item_id, available, location_id } = parsedPayload;
-
-          // Verificar si es la ubicación correcta (re-check por si no se filtró en action)
-           if (location_id && !isRelevantLocation(location_id, session.shipeuLocationId)) {
-              await prisma.webhookQueue.update({
-                where: { id: webhook.id },
-                data: { 
-                  status: 'ignored',
-                  error: JSON.stringify({
-                    reason: "location_mismatch",
-                    received_location: location_id,
-                    configured_location: session.shipeuLocationId
-                  })
-                }
-              });
-              continue;
-            }
-
-          itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
-          
-          if (!itemDetails?.sku) {
-            await prisma.webhookQueue.update({
-              where: { id: webhook.id },
-              data: { 
-                status: 'error',
-                error: JSON.stringify({ 
-                  reason: 'no_sku_found',
-                  case: 'inventory_levels_update',
-                  inventoryItem: itemDetails,
-                  inventory_item_id,
-                  payload: parsedPayload
-                })
-              }
-            });
-            continue;
-          }
-
-          shipeuData = {
-            sku: itemDetails.sku,
-            new_quantity: available,
-            product_title: itemDetails.variant?.product?.title,
-            variant_title: itemDetails.variant?.title,
-            price: itemDetails.variant?.price,
-            inventory_item_id,
-            location_id
-          };
-
-        } else if (webhook.topic === 'inventory_items_create') {
-          shipeuOperation = 'create_product';
-          const { id, sku } = parsedPayload;
-
-          if (!sku) {
-             await prisma.webhookQueue.update({
-              where: { id: webhook.id },
-              data: { 
-                status: 'error',
-                error: JSON.stringify({
-                  reason: 'no_sku_provided',
-                  case: 'inventory_items_create',
-                  inventory_item_id: id,
-                  payload: parsedPayload
-                })
-              }
-            });
-            continue;
-          }
-
-          itemDetails = await getInventoryItemDetails(admin, id);
-
-          shipeuData = {
-            sku,
-            inventory_item_id: id,
-            product_title: itemDetails.variant?.product?.title,
-            variant_title: itemDetails.variant?.title,
-            price: itemDetails.variant?.price,
-            vendor: itemDetails.variant?.product?.vendor,
-            product_status: itemDetails.variant?.product?.status,
-            tracked: itemDetails.tracked
-          };
-        } else {
-             // Tema no manejado, marcar como completado/ignorado
-             await prisma.webhookQueue.update({
-              where: { id: webhook.id },
-              data: { 
-                status: 'ignored',
-                error: JSON.stringify({ reason: 'unhandled_topic', topic: webhook.topic })
-              }
-            });
-            continue;
-        }
-
-        // Enviar a Shipeu si se determinó una operación
-        if (shipeuOperation) {
-            let syncResult;
-            let shipeuResponse = null;
-            let shipeuRequest = { sellerId: session.shipeuId, operation: shipeuOperation, data: shipeuData };
-
-            try {
-              syncResult = await syncWithShipeu(shipeuRequest);
-              shipeuResponse = await syncResult.json();
-
-              if (syncResult.status === 200) {
-                await prisma.webhookQueue.update({
-                  where: { id: webhook.id },
-                  data: { 
-                    status: 'completed',
-                    processedAt: new Date(),
-                    error: JSON.stringify({ message: 'Successfully processed', request: shipeuRequest, response: shipeuResponse })
-                  }
-                });
-
-                // Eliminar el webhook de la cola de la BD después de procesar con éxito
-                await prisma.webhookQueue.delete({
-                  where: { id: webhook.id }
-                });
-
-              } else {
-                 // Manejar errores de Shipeu API
-                await prisma.webhookQueue.update({
-                  where: { id: webhook.id },
-                  data: { 
-                    status: 'error',
-                    error: JSON.stringify({
-                      message: `Shipeu sync failed: ${syncResult.status}`,
-                      statusCode: syncResult.status,
-                      response: shipeuResponse,
-                      request: shipeuRequest
-                    }),
-                    processedAt: new Date(),
-                  }
-                });
-              }
-
-            } catch (syncError) {
-               // Manejar errores de la llamada fetch (red, parseo, etc.)
-               let errorDetails = { message: syncError.message };
-               if (process.env.NODE_ENV === "development") errorDetails.stack = syncError.stack;
-
-               await prisma.webhookQueue.update({
-                 where: { id: webhook.id },
-                 data: { 
-                   status: 'error',
-                   error: JSON.stringify({ message: 'Shipeu sync failed', details: errorDetails, request: shipeuRequest, response: shipeuResponse }),
-                   processedAt: new Date(),
-                 }
-               });
-            }
-        }
-
-        // Esperar 2 segundos antes de procesar el siguiente webhook para evitar saturar Shopify/Shipeu
-        await new Promise(r => setTimeout(r, 2000));
-
-      } catch (processingError) {
-        // Manejar errores generales durante el procesamiento (obtener item details, etc.)
-        let errorDetails = { message: processingError.message };
-        if (process.env.NODE_ENV === "development") errorDetails.stack = processingError.stack;
-
-        await prisma.webhookQueue.update({
-          where: { id: webhook.id },
-          data: { 
-            status: 'error',
-            error: JSON.stringify({ message: 'Webhook processing failed', details: errorDetails }),
-            processedAt: new Date()
-          }
-        });
-      }
-    }
-  } catch (queueError) {
-    console.error('Error fetching or iterating webhook queue:', queueError);
-    // Considerar agregar logging o notificación si esta parte falla consistentemente
-  }
-}
 
 function validatePayload(payload, topic) {
   const requiredFields = {
@@ -387,6 +111,21 @@ export const action = async ({ request }) => {
     // Normalizar el topic a minúsculas y formato estándar
     const normalizedTopic = topic.toLowerCase();
 
+    // Si es un webhook de eliminación, lo ignoramos inmediatamente
+    if (normalizedTopic === 'inventory_items_delete') {
+      return new Response(
+        JSON.stringify({
+          status: "ignored",
+          reason: "delete_operation",
+          timestamp: new Date().toISOString()
+        }, null, 2),
+        { 
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
     // Buscar la sesión más reciente
     const existingSession = await prisma.session.findFirst({
       where: { 
@@ -430,32 +169,146 @@ export const action = async ({ request }) => {
       );
     }
 
-    // Guardar el webhook en la BD
-    await prisma.webhookQueue.create({
+    // Verificar si ya existe un webhook pendiente para la misma operación
+    const existingWebhooks = await prisma.webhookQueue.findMany({
+      where: {
+        shop,
+        topic: normalizedTopic,
+        status: 'pending'
+      }
+    });
+
+    // Verificar si hay un webhook con el mismo contenido
+    const isDuplicate = existingWebhooks.some(existing => {
+      try {
+        const existingPayload = JSON.parse(existing.payload);
+        
+        // Para inventory_levels_update, comparar inventory_item_id y location_id
+        if (normalizedTopic === 'inventory_levels_update') {
+          return existingPayload.inventory_item_id === payload.inventory_item_id &&
+                 existingPayload.location_id === payload.location_id;
+        }
+        
+        // Para inventory_items_create, comparar id
+        if (normalizedTopic === 'inventory_items_create') {
+          return existingPayload.id === payload.id;
+        }
+
+        return false;
+      } catch (e) {
+        return false;
+      }
+    });
+
+    if (isDuplicate) {
+      // Si es un duplicado, respondemos como ignorado
+      // Y disparamos de forma asíncrona el procesamiento de la cola general
+      // para intentar procesar los webhooks fallidos (incluyendo el potencial original de este duplicado)
+      processWebhookQueue().catch(console.error); // Llama a la cola general asíncronamente
+
+      return new Response(
+        JSON.stringify({
+          status: "ignored",
+          reason: "duplicate_operation",
+          timestamp: new Date().toISOString()
+        }, null, 2),
+        { 
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    // Crear el webhook en la BD
+    const webhook = await prisma.webhookQueue.create({
       data: {
         id: uuidv4(),
         shop,
         topic: normalizedTopic,
         payload: JSON.stringify(payload),
-        status: 'pending',
-        // Los campos específicos del payload se extraen en processWebhookQueue
+        status: 'pending'
       }
     });
 
-    // Iniciar el procesamiento de la cola
-    processWebhookQueue();
+    // Procesar el webhook inmediatamente
+    try {
+      await processWebhookQueue(webhook.id);
+      
+      // Verificar el estado final del webhook
+      const processedWebhook = await prisma.webhookQueue.findUnique({
+        where: { id: webhook.id }
+      });
 
-    return new Response(
-      JSON.stringify({
-        status: "queued",
-        topic: normalizedTopic,
-        timestamp: new Date().toISOString()
-      }, null, 2),
-      { 
-        status: 200,
-        headers: { "Content-Type": "application/json" }
+      if (!processedWebhook) {
+        // Si el webhook ya no existe, significa que fue procesado y eliminado exitosamente
+        return new Response(
+          JSON.stringify({
+            status: "completed",
+            topic: normalizedTopic,
+            timestamp: new Date().toISOString(),
+            webhookId: webhook.id
+          }, null, 2),
+          { 
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
       }
-    );
+
+      return new Response(
+        JSON.stringify({
+          status: processedWebhook.status,
+          topic: normalizedTopic,
+          timestamp: new Date().toISOString(),
+          webhookId: webhook.id
+        }, null, 2),
+        { 
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    } catch (error) {
+      // Verificar si el webhook aún existe antes de actualizarlo
+      const existingWebhook = await prisma.webhookQueue.findUnique({
+        where: { id: webhook.id }
+      });
+
+      if (existingWebhook) {
+        // Si el webhook existe, actualizamos su estado
+        const attempts = existingWebhook.attempts + 1; // Calculamos los intentos ANTES de actualizar
+        await prisma.webhookQueue.update({
+          where: { id: webhook.id },
+          data: {
+            status: attempts >= 3 ? 'failed' : 'error', // Usamos el nuevo conteo de intentos para el status
+            attempts,
+            error: JSON.stringify({
+              message: error.message,
+              stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+              timestamp: new Date().toISOString()
+            }),
+            processedAt: new Date()
+          }
+        });
+
+        // Si el webhook actualizado tiene estado 'error' (es decir, aún tiene intentos), disparamos el procesador de cola de forma asíncrona
+        if (attempts < 3) {
+            processWebhookQueue().catch(console.error); // Llama a la cola general si hay intentos restantes
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          error: error.message,
+          webhookId: webhook.id,
+          timestamp: new Date().toISOString()
+        }, null, 2),
+        { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
   } catch (error) {
     return new Response(
       JSON.stringify({

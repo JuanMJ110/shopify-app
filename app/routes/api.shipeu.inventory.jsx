@@ -24,36 +24,59 @@ let processing = false;
 async function processQueue() {
   if (processing) return;
   processing = true;
-  while (inventoryQueue.length > 0) {
-    const { id, request, resolve } = inventoryQueue.shift();
-    const body = await request.clone().json();
-    
-    // Elimina duplicados de la cola (excepto el que se está procesando)
-    const filteredQueue = inventoryQueue.filter(item => {
-      const itemBody = item.request.body ? JSON.parse(item.request.body) : {};
-      return (itemBody.sku !== body.sku) || item.id === id;
-    });
-    
-    // Actualiza la cola con los elementos filtrados
-    inventoryQueue.length = 0;
-    inventoryQueue.push(...filteredQueue);
-    
-    try {
-      const result = await processInventoryRequest(request);
-      resolve(result);
-      await new Promise(r => setTimeout(r, 1000)); // Espera 1 segundo
-    } catch (err) {
-      resolve(json({ error: "Queue processing error", details: err.message }, { status: 500 }));
+  
+  try {
+    while (inventoryQueue.length > 0) {
+      const { id, request, resolve } = inventoryQueue.shift();
+      
+      try {
+        // Leer el cuerpo una sola vez y guardarlo
+        const body = await request.json();
+        
+        // Filtrar la cola antes de procesar
+        const filteredQueue = inventoryQueue.filter(item => item.id !== id);
+        inventoryQueue.length = 0;
+        inventoryQueue.push(...filteredQueue);
+        
+        // Procesar la solicitud
+        const result = await processInventoryRequest(new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: JSON.stringify(body)
+        }));
+        
+        resolve(result);
+        
+        // Esperar antes de procesar la siguiente solicitud
+        await new Promise(r => setTimeout(r, 1000));
+      } catch (err) {
+        resolve(json({ 
+          error: "Error procesando solicitud", 
+          details: err.message,
+          requestId: id
+        }, { status: 500 }));
+      }
     }
+  } catch (err) {
+    console.error('Error en el procesamiento de la cola:', err);
+  } finally {
+    processing = false;
   }
-  processing = false;
 }
 
 export async function action({ request }) {
   const id = crypto.randomUUID();
+  
   return new Promise((resolve) => {
+    // Agregar a la cola con un ID único
     inventoryQueue.push({ id, request, resolve });
-    processQueue();
+    
+    // Iniciar el procesamiento si no está en curso
+    if (!processing) {
+      processQueue().catch(err => {
+        console.error('Error fatal en processQueue:', err);
+      });
+    }
   });
 }
 
