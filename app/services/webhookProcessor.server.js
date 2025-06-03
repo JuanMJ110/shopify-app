@@ -123,27 +123,50 @@ async function processWebhook(webhook) {
       ...data
     };
 
-    const syncResult = await syncWithShipeu(shipeuRequest);
-    const shipeuResponse = await syncResult.json();
+    try {
+      const syncResult = await syncWithShipeu(shipeuRequest);
+      const shipeuResponse = await syncResult.json();
 
-    if (syncResult.status === 200) {
-      // Eliminar el webhook de la base de datos después de procesamiento exitoso
-      try {
-        await prisma.webhookQueue.delete({
-          where: { id: webhook.id }
-        });
-      } catch (deleteError) {
-        // Si falla la eliminación, actualizamos el estado a 'completed'
-        await prisma.webhookQueue.update({
-          where: { id: webhook.id },
-          data: {
-            status: 'completed',
-            processedAt: new Date()
-          }
-        });
+      if (syncResult.status === 200) {
+        // Eliminar el webhook de la base de datos después de procesamiento exitoso
+        try {
+          await prisma.webhookQueue.delete({
+            where: { id: webhook.id }
+          });
+        } catch (deleteError) {
+          // Si falla la eliminación, actualizamos el estado a 'completed'
+          await prisma.webhookQueue.update({
+            where: { id: webhook.id },
+            data: {
+              status: 'completed',
+              processedAt: new Date()
+            }
+          });
+        }
+      } else {
+        throw new Error(`Shipeu sync failed: ${syncResult.status}`);
       }
-    } else {
-      throw new Error(`Shipeu sync failed: ${syncResult.status}`);
+    } catch (error) {
+      // Verificar si es el error específico de producto no encontrado
+      if (error.message.includes('Product not found') && error.message.includes('status":"error"')) {
+        // Eliminar el webhook sin procesar
+        try {
+          await prisma.webhookQueue.delete({
+            where: { id: webhook.id }
+          });
+        } catch (deleteError) {
+          // Si falla la eliminación, actualizamos el estado a 'completed'
+          await prisma.webhookQueue.update({
+            where: { id: webhook.id },
+            data: {
+              status: 'completed',
+              processedAt: new Date()
+            }
+          });
+        }
+        return;
+      }
+      throw error;
     }
   } catch (error) {
     throw error;
@@ -213,6 +236,8 @@ async function determineOperation(topic, payload, admin) {
       return handleInventoryLevelsUpdate(payload, admin);
     case 'inventory_items_create':
       return handleInventoryItemsCreate(payload, admin);
+    case 'shipeu_inventory_update':
+      return handleShipeuInventoryUpdate(payload, admin);
     default:
       return { operation: null, data: null };
   }
@@ -261,6 +286,58 @@ async function handleInventoryItemsCreate(payload, admin) {
       vendor: itemDetails.variant?.product?.vendor,
       product_status: itemDetails.variant?.product?.status,
       tracked: itemDetails.tracked
+    }
+  };
+}
+
+async function handleShipeuInventoryUpdate(payload, admin) {
+  const { sku, quantity, locationId } = payload;
+  
+  // Buscar el producto por SKU
+  const searchResponse = await admin.graphql(
+    `query searchVariant($locationId: ID!) {
+      productVariants(first: 10, query: "sku:${sku}") {
+        edges {
+          node {
+            id
+            sku
+            inventoryItem {
+              id
+              inventoryLevel(locationId: $locationId) {
+                id
+                location {
+                  id
+                }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    {
+      variables: {
+        locationId
+      }
+    }
+  );
+
+  const searchData = await searchResponse.json();
+  const variants = searchData.data?.productVariants?.edges || [];
+  const exactVariant = variants.find(v => v.node.sku === sku);
+  
+  if (!exactVariant) {
+    throw new Error('Product not found');
+  }
+
+  const variant = exactVariant.node;
+  
+  return {
+    operation: 'update_quantity',
+    data: {
+      sku,
+      new_quantity: quantity,
+      inventory_item_id: variant.inventoryItem.id,
+      location_id: locationId
     }
   };
 }
@@ -325,13 +402,27 @@ async function syncWithShipeu(request) {
       throw new Error(`Respuesta inválida del servidor Shipeu (${response.status}). Content-Type: ${contentType}, Respuesta: ${text.substring(0, 200)}...`);
     }
 
-    // Verificar el estado de la respuesta
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Error del servidor Shipeu (${response.status}): ${JSON.stringify(errorData)}`);
+    const responseData = await response.json();
+
+    // Verificar si es un error 404 de producto no encontrado
+    if (response.status === 404 && 
+        responseData.status === 'error' && 
+        responseData.message === 'Product not found') {
+      return {
+        status: 404,
+        json: async () => responseData
+      };
     }
 
-    return response;
+    // Verificar el estado de la respuesta
+    if (!response.ok) {
+      throw new Error(`Error del servidor Shipeu (${response.status}): ${JSON.stringify(responseData)}`);
+    }
+
+    return {
+      status: response.status,
+      json: async () => responseData
+    };
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(`Error al procesar la respuesta de Shipeu: ${error.message}`);
