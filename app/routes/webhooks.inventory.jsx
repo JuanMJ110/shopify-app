@@ -274,12 +274,35 @@ export const action = async ({ request }) => {
       });
 
       if (existingWebhook) {
-        // Si el webhook existe, actualizamos su estado
-        const attempts = existingWebhook.attempts + 1; // Calculamos los intentos ANTES de actualizar
+        // Verificar si es un error 404 de Shipeu
+        const isShipeu404 = error.message?.includes('Shipeu sync failed: 404');
+        
+        if (isShipeu404) {
+          // Si es un 404, eliminamos el webhook en lugar de actualizarlo
+          await prisma.webhookQueue.delete({
+            where: { id: webhook.id }
+          });
+
+          return new Response(
+            JSON.stringify({
+              status: "ignored",
+              reason: "shipeu_404",
+              error: error.message,
+              timestamp: new Date().toISOString()
+            }, null, 2),
+            { 
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            }
+          );
+        }
+
+        // Si no es un 404, procedemos con la actualización normal
+        const attempts = existingWebhook.attempts + 1;
         await prisma.webhookQueue.update({
           where: { id: webhook.id },
           data: {
-            status: attempts >= 3 ? 'failed' : 'error', // Usamos el nuevo conteo de intentos para el status
+            status: attempts >= 3 ? 'failed' : 'error',
             attempts,
             error: JSON.stringify({
               message: error.message,
@@ -290,9 +313,9 @@ export const action = async ({ request }) => {
           }
         });
 
-        // Si el webhook actualizado tiene estado 'error' (es decir, aún tiene intentos), disparamos el procesador de cola de forma asíncrona
+        // Si el webhook actualizado tiene estado 'error', disparamos el procesador de cola
         if (attempts < 3) {
-            processWebhookQueue().catch(console.error); // Llama a la cola general si hay intentos restantes
+          processWebhookQueue().catch(console.error);
         }
       }
 
