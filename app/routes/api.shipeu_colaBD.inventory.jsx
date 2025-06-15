@@ -36,6 +36,13 @@ export async function action({ request }) {
       }, { status: 400 });
     }
 
+    if (quantityInt < 0) {
+      return json({ 
+        error: "Invalid quantity",
+        details: "Quantity cannot be negative"
+      }, { status: 400 });
+    }
+
     // Autenticar con admin usando las credenciales de la sesión
     const admin = {
       graphql: async (query, options = {}) => {
@@ -223,6 +230,29 @@ export async function action({ request }) {
         });
       }
 
+      // Verificar si el error es un 404 de Shipeu
+      if (processedWebhook.error && processedWebhook.error.includes('Shipeu sync failed: 404')) {
+        // Eliminar el webhook ya que el producto no existe en Shipeu
+        await prisma.webhookQueue.delete({
+          where: { id: webhook.id }
+        });
+
+        return json({ 
+          success: false,
+          message: "Product not found in Shipeu",
+          data: {
+            sku,
+            quantity: quantityInt,
+            timestamp: new Date().toISOString(),
+            shopifyUpdate: {
+              success: true,
+              adjustmentGroup: updateData.data.inventorySetQuantities.inventoryAdjustmentGroup.changes
+            },
+            error: "Shipeu sync failed: 404"
+          }
+        });
+      }
+
       return json({ 
         success: true,
         message: "Update queued successfully",
@@ -239,6 +269,29 @@ export async function action({ request }) {
         }
       });
     } catch (error) {
+      // Verificar si es un error 404 de Shipeu
+      if (error.message?.includes('Shipeu sync failed: 404')) {
+        // Eliminar el webhook ya que el producto no existe en Shipeu
+        await prisma.webhookQueue.delete({
+          where: { id: webhook.id }
+        });
+
+        return json({ 
+          success: false,
+          message: "Product not found in Shipeu",
+          data: {
+            sku,
+            quantity: quantityInt,
+            timestamp: new Date().toISOString(),
+            shopifyUpdate: {
+              success: true,
+              adjustmentGroup: updateData.data.inventorySetQuantities.inventoryAdjustmentGroup.changes
+            },
+            error: "Shipeu sync failed: 404"
+          }
+        });
+      }
+
       // Si hay un error en el procesamiento, actualizamos el estado del webhook
       await prisma.webhookQueue.update({
         where: { id: webhook.id },
@@ -278,4 +331,4 @@ export async function action({ request }) {
       details: error.message 
     }, { status: 500 });
   }
-} 
+}
