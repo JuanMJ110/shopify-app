@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
+// import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { verifyApiKey } from "../utils/auth.server.js";
 

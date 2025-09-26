@@ -33,6 +33,12 @@ Antes de comenzar, necesitarás:
    npm install
    ```
 
+2.1 **Instalar CLI de shopify**:
+   ```
+   npm install -D @shopify/cli
+   ```
+
+
 3. **Configurar variables de entorno**:
    Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
    ```env
@@ -45,7 +51,7 @@ Antes de comenzar, necesitarás:
 
 4. **Configurar la base de datos**:
    ```bash
-   npm run setup
+   npm run prisma studio
    ```
 
 ## Desarrollo Local
@@ -58,6 +64,16 @@ Antes de comenzar, necesitarás:
 2. **Instalar la aplicación en tu tienda de desarrollo**:
    - Presiona 'P' en la terminal para abrir la URL de la aplicación
    - Sigue el proceso de instalación en tu tienda de desarrollo
+
+3. **Instalar Ngrok**:
+   - Ngrok es de sumar importacia en el desarrollo, expone nuestra app y la hace accesible para shipeu.
+
+1. **Iniciar ngrok en el puerto que corre nuestra app**:
+   ```bash
+   ngrok http [puerto en el que corre]
+   ```
+
+
 
 ## Despliegue
 

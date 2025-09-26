@@ -1,14 +1,12 @@
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { Page, Card, Layout, Text, BlockStack } from "@shopify/polaris";
-import fs from "fs";
-import path from "path";
 import { authenticate } from "../shopify.server";
+import { loadTerms } from "../utils/terms.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  const termsPath = path.join(process.cwd(), "terminos-de-servicio.md");
-  const termsContent = fs.readFileSync(termsPath, "utf-8");
+  const termsContent = await loadTerms();
   return json({ content: termsContent });
 };
 
@@ -26,10 +24,10 @@ export default function TermsOfService() {
     <Page fullWidth>
       <Layout>
         <Layout.Section>
-          <BlockStack gap="800">
+          <BlockStack gap="500">
             <Card>
-              <BlockStack gap="400">
-                <Text as="h1" variant="heading3xl">
+              <BlockStack gap="500">
+                <Text as="h1" variant="heading2xl">
                   {title}
                 </Text>
                 <Text as="p" variant="bodyMd">

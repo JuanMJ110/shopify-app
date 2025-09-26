@@ -1,15 +1,15 @@
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
-import { Page, Card, Layout, Text, BlockStack, List } from "@shopify/polaris";
-import fs from "fs";
-import path from "path";
+import {
+  Page, Card, Layout, Text, BlockStack, List
+} from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { loadPrivacyPolicy } from "../utils/privacy.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  const privacyPolicyPath = path.join(process.cwd(), "privacy-policy.md");
-  const privacyPolicyContent = fs.readFileSync(privacyPolicyPath, "utf-8");
-  return json({ content: privacyPolicyContent });
+  const content = loadPrivacyPolicy();
+  return json({ content });
 };
 
 export default function PrivacyPolicy() {
@@ -26,10 +26,10 @@ export default function PrivacyPolicy() {
     <Page fullWidth>
       <Layout>
         <Layout.Section>
-          <BlockStack gap="800">
+          <BlockStack gap="500">
             <Card>
-              <BlockStack gap="400">
-                <Text as="h1" variant="heading3xl">
+              <BlockStack gap="500">
+                <Text as="h1" variant="heading2xl">
                   {title}
                 </Text>
                 <Text as="p" variant="bodyMd">

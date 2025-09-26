@@ -122,9 +122,9 @@ La fecha de la última actualización se mostrará al principio de esta polític
 
 En Shipeu Middleware nos comprometemos a brindar soporte a todos nuestros usuarios. Si tienes preguntas, problemas técnicos o necesitas ayuda con la aplicación, puedes contactarnos a través de los siguientes medios:
 
-- **Correo electrónico:** support@shipeu-middleware.com   
-- **Horario de atención:** Lunes a viernes, de 9:00 a 18:00 (hora local de Colombia)  
-- **Tiempo de respuesta estimado:** 2-3 días hábiles
+- Correo electrónico: support@shipeu-middleware.com   
+- Horario de atención: Lunes a viernes, de 9:00 a 18:00 (hora local de Colombia)  
+- Tiempo de respuesta estimado: 2-3 días hábiles
 
 Nuestro equipo de soporte atenderá las siguientes solicitudes:
 - Ayuda con la instalación y configuración de la app.
@@ -135,5 +135,3 @@ Nuestro equipo de soporte atenderá las siguientes solicitudes:
 No ofrecemos soporte para:
 - Personalizaciones fuera del alcance de la app.
 - Problemas relacionados con servicios de terceros ajenos a Shipeu Middleware.
-
-Última actualización: [Fecha actual] 
