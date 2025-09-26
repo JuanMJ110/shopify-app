@@ -4,7 +4,7 @@ import {
   Page, Card, Layout, Text, BlockStack, List
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
-import { loadPrivacyPolicy } from "../utils/privacy.server";
+import { loadPrivacyPolicy } from "../../utils/privacy.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
