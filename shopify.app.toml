@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "74e2e8c014ffbbc5621af4a6731ebddf"
-application_url = "https://shopify-app.onrender.com"
+application_url = "https://shopify-app-n2cp.onrender.com/"
 embedded = true
 name = "shipeu-middleware"
 handle = "shipeu-middleware"
@@ -38,7 +38,7 @@ api_version = "2025-01"
 scopes = "read_all_orders,read_orders,write_orders,read_products,write_products,read_shipping,read_assigned_fulfillment_orders,write_assigned_fulfillment_orders,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders,read_third_party_fulfillment_orders,write_third_party_fulfillment_orders,read_inventory,write_inventory,read_product_listings,read_customers,read_locations"
 
 [auth]
-redirect_urls = ["https://shopify-app.onrender.com/auth/callback", "https://shopify-app.onrender.com/auth/shopify/callback", "https://shopify-app.onrender.com/api/auth/callback"]
+redirect_urls = ["https://shopify-app-n2cp.onrender.com/auth/callback", "https://shopify-app-n2cp.onrender.com/auth/shopify/callback", "https://shopify-app-n2cp.onrender.com/api/auth/callback"]
 
 [pos]
 embedded = false

@@ -3,7 +3,8 @@
  */
 
 const SHIPEU_CONFIG = {
-  API_URL: "http://localhost/shipeu/public/api/shopify",
+  // API_URL: "http://localhost/shipeu/public/api/shopify",
+  API_URL: "https://dev.shipeu.com/api/shopify",
   SHIPEU_API_KEY: "08afb311-1009-45a9-923e-0c032a4676e2", // API key general para todas las peticiones
   TIMEOUT: 30000
 };
