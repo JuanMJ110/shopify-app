@@ -6,7 +6,7 @@ import { loadTerms } from "../utils/terms.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  const termsContent = await loadTerms();
+  const termsContent = loadTerms();
   return json({ content: termsContent });
 };
 
