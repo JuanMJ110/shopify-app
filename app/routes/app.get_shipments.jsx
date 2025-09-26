@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import prisma from "../db.server";
+// import prisma from "../db.server";
 import { verifyApiKey } from "../utils/auth.server.js";
 
 async function obtenerOrdenes(accessToken, shop, financialStatus = "any", status = "any") {
