@@ -6,7 +6,7 @@ import { loadTerms } from "../utils/terms.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  const termsContent = loadTerms();
+  const termsContent = await loadTerms();
   return json({ content: termsContent });
 };
 
@@ -17,8 +17,8 @@ export default function TermsOfService() {
   const mainSections = sections.slice(1);
 
   const processContent = (content) => {
-    return content.replace(/^### /gm, '').replace(/^### /gm, '').replace(/^#{3,}/gm, '');
-  };
+    return content.replace(/^#{1,}/gm, '');
+  };  
 
   return (
     <Page fullWidth>

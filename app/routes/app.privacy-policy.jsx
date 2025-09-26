@@ -8,7 +8,7 @@ import { loadPrivacyPolicy } from "../utils/privacy.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  const content = loadPrivacyPolicy();
+  const content = await loadPrivacyPolicy();
   return json({ content });
 };
 
@@ -19,8 +19,8 @@ export default function PrivacyPolicy() {
   const mainSections = sections.slice(1);
 
   const processContent = (content) => {
-    return content.replace(/^### /gm, '').replace(/^### /gm, '').replace(/^#{3,}/gm, '');
-  };
+    return content.replace(/^#{1,}/gm, '');
+  };  
 
   return (
     <Page fullWidth>
