@@ -1,15 +1,21 @@
 /**
  * Configuración de la API de Shipeu
  */
-import dotenv from 'dotenv';
-dotenv.config();
 
-const SHIPEU_CONFIG = {
-  // API_URL: "http://localhost/shipeu/public/api/shopify",
-  API_URL: process.env.SHIPEU_URl,
-  SHIPEU_API_KEY: process.env.SHIPEU_API_KEY, // API key general para todas las peticiones
-  TIMEOUT: 30000
-};
+// const SHIPEU_CONFIG = {
+//   API_URL: "http://localhost/shipeu/public/api/shopify",
+//   // API_URL: "https://dev.shipeu.com/api/shopify",
+//   SHIPEU_API_KEY: "08afb311-1009-45a9-923e-0c032a4676e2", // API key general para todas las peticiones
+//   TIMEOUT: 30000
+// };
+
+// const SHIPEU_CONFIG = {
+//   // API_URL: "http://localhost/shipeu/public/api/shopify",
+//   API_URL: process.env.SHIPEU_URL,
+//   SHIPEU_API_KEY: process.env.SHIPEU_API_KEY, // API key general para todas las peticiones
+//   TIMEOUT: 30000
+// };
+
 
 /**
  * IMPLEMENTACIÓN REAL DE LA API DE SHIPEU
@@ -17,15 +23,15 @@ const SHIPEU_CONFIG = {
 
 async function makeShipeuRequest(endpoint, options = {}) {
   try {
-    const response = await fetch(`${SHIPEU_CONFIG.API_URL}${endpoint}`, { 
+    const response = await fetch(`${process.env.SHIPEU_URL}${endpoint}`, { 
       ...options,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Authorization': `Bearer ${SHIPEU_CONFIG.SHIPEU_API_KEY}`,
+        'Authorization': `Bearer ${process.env.SHIPEU_API_KEY}`,
         ...options.headers,
       },
-      timeout: SHIPEU_CONFIG.TIMEOUT,
+      timeout: 30000,
     });
 
     // Primero verificamos si la respuesta es JSON

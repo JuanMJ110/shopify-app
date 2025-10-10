@@ -70,7 +70,9 @@ export const loader = async ({ request }) => {
     isConfigured: existingSession?.shipeuStatus === "active",
     apiKey: existingSession?.apiKey || null,
     shipeuLocationId: existingSession?.shipeuLocationId || null,
-    locations
+    locations,
+    shipeuUrl: process.env.SHIPEU_URL,
+    shipeuApiKey: process.env.SHIPEU_API_KEY,
   });
 };
 
