@@ -1,11 +1,13 @@
 /**
  * Configuración de la API de Shipeu
  */
+import dotenv from 'dotenv';
+dotenv.config();
 
 const SHIPEU_CONFIG = {
   // API_URL: "http://localhost/shipeu/public/api/shopify",
-  API_URL: "https://dev.shipeu.com/api/shopify",
-  SHIPEU_API_KEY: "08afb311-1009-45a9-923e-0c032a4676e2", // API key general para todas las peticiones
+  API_URL: process.env.SHIPEU_URl,
+  SHIPEU_API_KEY: process.env.SHIPEU_API_KEY, // API key general para todas las peticiones
   TIMEOUT: 30000
 };
 
