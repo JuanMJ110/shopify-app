@@ -84,7 +84,7 @@ async function getInventoryItemDetails(admin, inventoryItemId) {
 
 async function syncWithShipeu({ sellerId, operation, data }) {
   const url = process.env.SHIPEU_URL || 'http://dev.shipeu.com/api/shopify';
-  const apiKey = process.env.SHIPEU_API_KEY || '08afb311-1009-45a9-923e-0c032a4676e2';
+  const apiKey = process.env.SHIPEU_API_KEY;
   return fetch(`${url}/store/inventory`, {
     method: 'POST',
     headers: {
