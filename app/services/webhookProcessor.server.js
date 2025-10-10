@@ -382,14 +382,13 @@ function formatInventoryItemGid(id) {
 }
 
 async function syncWithShipeu(request) {
-  const shipeuApiUrl = 'http://localhost/shipeu/public/api/shopify/store/inventory';
-  
+  const shipeuApiUrl = `${process.env.SHIPEU_URL}/store/inventory`;
   try {
     const response = await fetch(shipeuApiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${'08afb311-1009-45a9-923e-0c032a4676e2'}`,
+        'Authorization': `Bearer ${process.env.SHIPEU_API_KEY}`,
         'Accept': 'application/json'
       },
       body: JSON.stringify(request)
