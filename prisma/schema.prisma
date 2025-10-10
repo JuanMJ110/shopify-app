@@ -8,10 +8,19 @@ generator client {
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+//datasource db {
+//  provider = "sqlite"
+//  url      = "file:dev.sqlite"
+//}
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = "postgresql://shopify_app_90vy_user:zogJ0dvW5Kfqj7U8PutnP6tKvTny4Rok@dpg-d3kgrrili9vc73c5tga0-a.oregon-postgres.render.com/shopify_app_90vy"
 }
+//datasource db {
+//  provider = "postgresql"
+//  url      = "postgresql://postgres:root@localhost:5432/Shopify-app-local"
+//}
+
 
 
 model Session {
