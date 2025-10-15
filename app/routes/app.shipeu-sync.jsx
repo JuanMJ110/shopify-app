@@ -210,7 +210,8 @@ export default function ShipeuSync() {
   const { isConfigured, apiKey: initialApiKey, locations, shipeuLocationId } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
-  const [currentApiKey, setCurrentApiKey] = useState(() => actionData?.apiKey || initialApiKey || "");
+  const [currentApiKey, setCurrentApiKey] = useState(initialApiKey || "");
+
   const [showApiKey, setShowApiKey] = useState(false);
   const [toastActive, setToastActive] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
@@ -240,16 +241,13 @@ export default function ShipeuSync() {
   });
 
   useEffect(() => {
-    if (actionData?.error) {
-      setErrorMessage(actionData.error);
-      setShowError(true);
-      // Auto-cerrar después de 5 segundos
-      const timer = setTimeout(() => {
-        setShowError(false);
-      }, 5000);
-      return () => clearTimeout(timer);
+    if (actionData?.apiKey) {
+      setCurrentApiKey(actionData.apiKey);
+    } else if (initialApiKey) {
+      setCurrentApiKey(initialApiKey);
     }
-  }, [actionData]);
+  }, [actionData, initialApiKey]);
+  
 
   useEffect(() => {
     if (actionData?.apiKey) {
