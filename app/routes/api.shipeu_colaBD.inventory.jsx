@@ -79,11 +79,12 @@ export async function action({ request }) {
     );
 
     const searchData = await searchResponse.json();
+    const variants = searchData.data?.productVariants?.edges || [];
+    if (variants.length === 0)
+      return json({ error: "SKU not found in Shopify" }, { status: 404 });
     const variant = variants[0].node;
     const quantities = variant.inventoryItem.inventoryLevel?.quantities || [];
     const onHandQuantity = quantities.find(q => q.name === 'on_hand')?.quantity || 0;
-    if (variants.length === 0)
-      return json({ error: "SKU not found in Shopify" }, { status: 404 });
 
     const inventoryItemId = variants[0].node.inventoryItem.id;
 
