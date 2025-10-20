@@ -20,7 +20,94 @@ export async function action({ request }) {
     if (!sku || isNaN(q) || q < 0)
       return json({ error: "Invalid parameters" }, { status: 400 });
 
-    // Guarda en cola
+    // --- 1. Buscar el producto por SKU ---
+    const shopifyDomain = `https://${session.shop}`;
+    const queryUrl = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
+
+    const searchQuery = `
+      query searchVariant($locationId: ID!) {
+        productVariants(first: 1, query: "sku:${sku}") {
+          edges {
+            node {
+              id
+              sku
+              inventoryItem {
+                id
+              }
+            }
+          }
+        }
+      }`;
+
+    const searchResp = await fetch(queryUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": session.accessToken,
+      },
+      body: JSON.stringify({
+        query: searchQuery,
+        variables: { locationId: session.shipeuLocationId },
+      }),
+    });
+
+    const searchData = await searchResp.json();
+    const variants = searchData?.data?.productVariants?.edges || [];
+    if (variants.length === 0)
+      return json({ error: "SKU not found in Shopify" }, { status: 404 });
+
+    const inventoryItemId = variants[0].node.inventoryItem.id;
+
+    // --- 2. Actualizar inventario en Shopify ---
+    const mutation = `
+      mutation InventorySet($input: InventorySetQuantitiesInput!) {
+        inventorySetQuantities(input: $input) {
+          inventoryAdjustmentGroup {
+            createdAt
+            reason
+            changes {
+              name
+              delta
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }`;
+
+    const updateResp = await fetch(queryUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": session.accessToken,
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: {
+          input: {
+            name: "available",
+            reason: "correction",
+            ignoreCompareQuantity: true,
+            quantities: [
+              {
+                inventoryItemId,
+                locationId: session.shipeuLocationId,
+                quantity: q,
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    const updateData = await updateResp.json();
+    const userErrors = updateData.data?.inventorySetQuantities?.userErrors;
+    if (userErrors?.length > 0)
+      return json({ error: "Shopify error", details: userErrors }, { status: 400 });
+
+    // --- 3. Crear webhook en base de datos ---
     const webhook = await prisma.webhookQueue.create({
       data: {
         shop: session.shop,
@@ -36,7 +123,7 @@ export async function action({ request }) {
       },
     });
 
-    // Procesar en segundo plano SIN bloquear la respuesta
+    // --- 4. Procesar en background ---
     setImmediate(async () => {
       try {
         const { processWebhookQueue } = await import(
@@ -48,15 +135,23 @@ export async function action({ request }) {
       }
     });
 
+    // --- 5. Responder inmediatamente ---
     return json({
       success: true,
-      message: "Queued successfully",
-      id: webhook.id,
-      sku,
-      quantity: q,
+      message: "Inventory updated in Shopify and queued for Shipeu sync",
+      data: {
+        sku,
+        quantity: q,
+        shopifyResult:
+          updateData.data?.inventorySetQuantities?.inventoryAdjustmentGroup?.changes,
+        webhookId: webhook.id,
+      },
     });
   } catch (err) {
     console.error("Inventory update failed:", err);
-    return json({ error: "Internal error", details: err.message }, { status: 500 });
+    return json(
+      { error: "Internal error", details: err.message },
+      { status: 500 }
+    );
   }
 }
