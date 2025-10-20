@@ -1,380 +1,248 @@
+import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4 } from 'uuid';
+import { processWebhookQueue } from "../services/webhookProcessor.server";
 
-const BATCH_SIZE = 10;
-const CLEANUP_INTERVAL_HOURS = 6;
-const CLEANUP_AGE_DAYS = 7;
-const LOOP_INTERVAL_MS = 60000; // 60 segundos
+const processedWebhooks = new Set();
 
-// ===== LOOP AUTOMÁTICO =====
-(async function autoProcessLoop() {
-  console.log("[WebhookQueue] Loop iniciado");
-  while (true) {
-    try {
-      await processWebhookQueue();
-    } catch (err) {
-      console.error("[WebhookQueue] Error en ejecución:", err.message);
-    }
-    await new Promise((res) => setTimeout(res, LOOP_INTERVAL_MS));
-  }
-})();
-
-// ===== PROCESADOR PRINCIPAL =====
-export async function processWebhookQueue(specificWebhookId = null) {
-  try {
-    // Limpieza periódica no bloqueante
-    setImmediate(runCleanupOldWebhooks);
-
-    const whereClause = specificWebhookId
-      ? { id: specificWebhookId }
-      : {
-          OR: [
-            { status: "pending" },
-            { status: "error", attempts: { lt: 3 } },
-          ],
-        };
-
-    const pendingWebhooks = await prisma.webhookQueue.findMany({
-      where: whereClause,
-      orderBy: [{ createdAt: "asc" }, { attempts: "asc" }],
-      take: specificWebhookId ? 1 : BATCH_SIZE,
-      select: {
-        id: true,
-        shop: true,
-        topic: true,
-        payload: true,
-        status: true,
-        attempts: true,
-      },
-    });
-
-    for (const webhook of pendingWebhooks) {
-      try {
-        const parsedPayload = JSON.parse(webhook.payload);
-
-        // Evita duplicados simultáneos
-        const existingWebhooks = await prisma.webhookQueue.findMany({
-          where: {
-            shop: webhook.shop,
-            topic: webhook.topic,
-            status: "pending",
-            id: { not: webhook.id },
-          },
-          select: { id: true, payload: true },
-        });
-
-        const isDuplicate = existingWebhooks.some((existing) => {
-          try {
-            const existingPayload = JSON.parse(existing.payload);
-            if (webhook.topic === "inventory_levels_update") {
-              return (
-                existingPayload.inventory_item_id ===
-                  parsedPayload.inventory_item_id &&
-                existingPayload.location_id === parsedPayload.location_id
-              );
-            }
-            if (webhook.topic === "inventory_items_create") {
-              return existingPayload.id === parsedPayload.id;
-            }
-            return false;
-          } catch {
-            return false;
-          }
-        });
-
-        if (isDuplicate) continue;
-
-        await processWebhook(webhook);
-      } catch (error) {
-        await handleProcessingError(webhook, error);
-        if (specificWebhookId) throw error;
-      }
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-// ===== PROCESA UN SOLO WEBHOOK =====
-async function processWebhook(webhook) {
-  try {
-    const parsedPayload = JSON.parse(webhook.payload);
-
-    const session = await prisma.session.findFirst({
-      where: { shop: webhook.shop },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!session) throw new Error("No session found for shop");
-
-    const admin = createAdminClient(session);
-    const { operation, data } = await determineOperation(
-      webhook.topic,
-      parsedPayload,
-      admin
-    );
-    if (!operation) return;
-
-    const shipeuRequest = {
-      sellerId: session.shipeuId,
-      operation,
-      ...data,
-    };
-
-    const syncResult = await syncWithShipeu(shipeuRequest);
-    const shipeuResponse = await syncResult.json();
-
-    if (syncResult.status === 200) {
-      await safeDeleteWebhook(webhook.id);
-    } else if (
-      syncResult.status === 404 &&
-      shipeuResponse?.message === "Product not found"
-    ) {
-      await safeDeleteWebhook(webhook.id);
-    } else {
-      throw new Error(`Shipeu sync failed: ${syncResult.status}`);
-    }
-  } catch (error) {
-    throw error;
-  }
-}
-
-// ===== ELIMINA O MARCA COMPLETADO =====
-async function safeDeleteWebhook(id) {
-  try {
-    await prisma.webhookQueue.delete({ where: { id } });
-  } catch {
-    await prisma.webhookQueue.update({
-      where: { id },
-      data: { status: "completed", processedAt: new Date() },
-    });
-  }
-}
-
-// ===== POLÍTICA DE REINTENTOS =====
-async function handleProcessingError(webhook, error) {
-  try {
-    const existing = await prisma.webhookQueue.findUnique({
-      where: { id: webhook.id },
-      select: { attempts: true },
-    });
-    if (!existing) return;
-
-    const attempts = existing.attempts + 1;
-    await prisma.webhookQueue.update({
-      where: { id: webhook.id },
-      data: {
-        status: attempts >= 3 ? "failed" : "error",
-        attempts,
-        error: JSON.stringify({
-          message: error.message,
-          stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-          timestamp: new Date().toISOString(),
-        }),
-        processedAt: new Date(),
-      },
-    });
-  } catch {}
-}
-
-// ===== LIMPIEZA AUTOMÁTICA =====
-let lastCleanup = 0;
-async function runCleanupOldWebhooks() {
-  const now = Date.now();
-  if (now - lastCleanup < CLEANUP_INTERVAL_HOURS * 3600 * 1000) return;
-  lastCleanup = now;
-
-  const cutoffDate = new Date(Date.now() - CLEANUP_AGE_DAYS * 86400000);
-  try {
-    const deleted = await prisma.webhookQueue.deleteMany({
-      where: {
-        OR: [{ status: "completed" }, { status: "failed" }],
-        processedAt: { lt: cutoffDate },
-      },
-    });
-    if (deleted.count > 0)
-      console.log(`[CLEANUP] Eliminados ${deleted.count} webhooks antiguos`);
-  } catch (err) {
-    console.error("Cleanup error:", err.message);
-  }
-}
-
-// ===== CLIENTE SHOPIFY =====
-function createAdminClient(session) {
-  return {
-    graphql: async (query, options = {}) => {
-      const url = `https://${session.shop}/admin/api/2024-10/graphql.json`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": session.accessToken,
-        },
-        body: JSON.stringify({
-          query,
-          variables: options.variables,
-        }),
-      });
-      return response;
-    },
+function validatePayload(payload, topic) {
+  const requiredFields = {
+    'inventory_levels/update': ['inventory_item_id', 'available', 'location_id'],
+    'inventory_items/create': ['id', 'sku'],
+    'inventory_items/update': ['id'],
+    'inventory_items/delete': ['id']
   };
-}
-
-// ===== DETERMINAR OPERACIÓN =====
-async function determineOperation(topic, payload, admin) {
-  switch (topic) {
-    case "inventory_levels_update":
-      return handleInventoryLevelsUpdate(payload, admin);
-    case "inventory_items_create":
-      return handleInventoryItemsCreate(payload, admin);
-    case "shipeu_inventory_update":
-      return handleShipeuInventoryUpdate(payload, admin);
-    default:
-      return { operation: null, data: null };
+  const fields = requiredFields[topic];
+  if (!fields) return { valid: true };
+  const missingFields = fields.filter(field => !payload[field]);
+  if (missingFields.length > 0) {
+    return { valid: false, error: `Missing required fields: ${missingFields.join(', ')}` };
   }
+  return { valid: true };
 }
 
-// ===== FUNCIONES ORIGINALES =====
-async function handleInventoryLevelsUpdate(payload, admin) {
-  const { inventory_item_id, new_quantity, location_id } = payload;
-  const itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
-  if (!itemDetails?.sku) throw new Error("No SKU found for inventory item");
-  return {
-    operation: "update_quantity",
-    data: {
-      sku: itemDetails.sku,
-      new_quantity,
-      product_title: itemDetails.variant?.product?.title,
-      variant_title: itemDetails.variant?.title,
-      price: itemDetails.variant?.price,
-      inventory_item_id,
-      location_id,
-    },
-  };
-}
-
-async function handleInventoryItemsCreate(payload, admin) {
-  const { id, sku } = payload;
-  if (!sku) throw new Error("No SKU provided");
-  const itemDetails = await getInventoryItemDetails(admin, id);
-  return {
-    operation: "create_product",
-    data: {
-      sku,
-      inventory_item_id: id,
-      product_title: itemDetails.variant?.product?.title,
-      variant_title: itemDetails.variant?.title,
-      price: itemDetails.variant?.price,
-      vendor: itemDetails.variant?.product?.vendor,
-      product_status: itemDetails.variant?.product?.status,
-      tracked: itemDetails.tracked,
-    },
-  };
-}
-
-async function handleShipeuInventoryUpdate(payload, admin) {
-  const { sku, quantity, locationId } = payload;
-  const searchResponse = await admin.graphql(
-    `query searchVariant($locationId: ID!) {
-      productVariants(first: 10, query: "sku:${sku}") {
-        edges {
-          node {
-            id
-            sku
-            inventoryItem {
-              id
-              inventoryLevel(locationId: $locationId) {
-                id
-                location { id }
-              }
-            }
-          }
-        }
-      }
-    }`,
-    { variables: { locationId } }
-  );
-
-  const searchData = await searchResponse.json();
-  const variants = searchData.data?.productVariants?.edges || [];
-  const exactVariant = variants.find((v) => v.node.sku === sku);
-  if (!exactVariant) throw new Error("Product not found");
-
-  const variant = exactVariant.node;
-  return {
-    operation: "update_quantity",
-    data: {
-      sku,
-      new_quantity: quantity,
-      inventory_item_id: variant.inventoryItem.id,
-      location_id: locationId,
-    },
-  };
-}
-
-async function getInventoryItemDetails(admin, id) {
-  const formattedId = formatInventoryItemGid(id);
-  const response = await admin.graphql(
-    `#graphql
-    query getInventoryItem($id: ID!) {
-      inventoryItem(id: $id) {
-        id
-        sku
-        tracked
-        variant {
-          id
-          title
-          price
-          inventoryQuantity
-          product {
-            id
-            title
-            status
-            vendor
-          }
-        }
-      }
-    }`,
-    { variables: { id: formattedId } }
-  );
-  const json = await response.json();
-  return json.data.inventoryItem;
+function extractLocationId(locationGid) {
+  if (!locationGid) return null;
+  if (/^\d+$/.test(locationGid)) return parseInt(locationGid, 10);
+  const match = locationGid.match(/gid:\/\/shopify\/Location\/(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
 }
 
 function formatInventoryItemGid(id) {
-  return String(id).startsWith("gid://")
-    ? id
-    : `gid://shopify/InventoryItem/${id}`;
+  if (String(id).startsWith('gid://')) return id;
+  return `gid://shopify/InventoryItem/${id}`;
 }
 
-// ===== SINCRONIZACIÓN SHIPEU =====
-async function syncWithShipeu(request) {
-  const url = `${process.env.SHIPEU_URL}/store/inventory`;
+// Consulta on_hand usando admin_graphql_api_id, limpiando parámetros
+async function obtenerExistenciaOnHand(existingSession, adminGraphqlApiId) {
+  // const gid = adminGraphqlApiId.split('?')[0];
+  const gid = adminGraphqlApiId;
+  const url = `https://${existingSession.shop}/admin/api/2024-10/graphql.json`;
+  const queryBody = {
+    query: `query {
+      inventoryLevel(id: "${gid}") {
+        quantities(names: ["on_hand"]) {
+          name
+          quantity
+        }
+      }
+    }`
+  };
   const response = await fetch(url, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.SHIPEU_API_KEY}`,
-      Accept: "application/json",
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': existingSession.accessToken
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify(queryBody)
   });
-
-  const contentType = response.headers.get("content-type");
-  if (!contentType?.includes("application/json")) {
-    const text = await response.text();
-    throw new Error(
-      `Respuesta inválida de Shipeu (${response.status}): ${text.substring(0, 200)}`
-    );
-  }
-
-  const data = await response.json();
-  if (response.status === 404 && data.message === "Product not found") {
-    return { status: 404, json: async () => data };
-  }
-  if (!response.ok) {
-    throw new Error(
-      `Error Shipeu (${response.status}): ${JSON.stringify(data)}`
-    );
-  }
-  return { status: response.status, json: async () => data };
+  if (!response.ok) throw new Error(`Error Shopify response: ${response.statusText}`);
+  const result = await response.json();
+  return result?.data?.inventoryLevel?.quantities?.[0]?.quantity ?? null;
 }
+
+async function syncWithShipeu({ sellerId, operation, data }) {
+  const url = process.env.SHIPEU_URL || 'http://dev.shipeu.com/api/shopify';
+  const apiKey = process.env.SHIPEU_API_KEY;
+  return fetch(`${url}/store/inventory`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      sellerId,
+      operation,
+      ...data
+    })
+  });
+}
+
+function isRelevantLocation(locationId, configuredLocationId) {
+  const normalizedConfigured = extractLocationId(configuredLocationId);
+  const normalizedReceived = parseInt(locationId, 10);
+  return normalizedConfigured === normalizedReceived;
+}
+
+export const action = async ({ request }) => {
+  try {
+    const { shop, topic, payload } = await authenticate.webhook(request);
+    const normalizedTopic = topic.toLowerCase();
+
+    const validation = validatePayload(payload, normalizedTopic);
+    if (!validation.valid) {
+      return new Response(JSON.stringify({
+        status: "error",
+        error: validation.error,
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+
+    if (normalizedTopic === 'inventory_items_delete') {
+      return new Response(JSON.stringify({
+        status: "ignored",
+        reason: "delete_operation",
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    const existingSession = await prisma.session.findFirst({ where: { shop }, orderBy: { createdAt: 'desc' } });
+    if (!existingSession) {
+      return new Response(JSON.stringify({
+        error: "No session found",
+        shop,
+        timestamp: new Date().toISOString(),
+        message: "Please ensure the app is properly installed and configured"
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    const locationId = payload.location_id || payload.location?.id;
+    if (locationId && !isRelevantLocation(locationId, existingSession.shipeuLocationId)) {
+      return new Response(JSON.stringify({
+        status: "ignored",
+        reason: "location_mismatch",
+        received_location: locationId,
+        configured_location: existingSession.shipeuLocationId,
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+
+    const existingWebhooks = await prisma.webhookQueue.findMany({
+      where: { shop, topic: normalizedTopic, status: 'pending' }
+    });
+    const isDuplicate = existingWebhooks.some(existing => {
+      try {
+        const p = JSON.parse(existing.payload);
+        if (normalizedTopic === 'inventory_levels_update') {
+          return p.inventory_item_id === payload.inventory_item_id && p.location_id === payload.location_id;
+        }
+        if (normalizedTopic === 'inventory_items_create') {
+          return p.id === payload.id;
+        }
+        return false;
+      } catch { return false; }
+    });
+    if (isDuplicate) {
+      processWebhookQueue().catch(console.error);
+      return new Response(JSON.stringify({
+        status: "ignored",
+        reason: "duplicate_operation",
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    const webhookKey = `${shop}_${normalizedTopic}_${JSON.stringify(payload)}`;
+    if (processedWebhooks.has(webhookKey)) {
+      return new Response(JSON.stringify({
+        status: "ignored",
+        reason: "duplicate_in_execution",
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    processedWebhooks.add(webhookKey);
+
+    let newQuantity = payload.available;
+    if (normalizedTopic === 'inventory_levels_update' && payload.admin_graphql_api_id) {
+      try {
+        const onHand = await obtenerExistenciaOnHand(existingSession, payload.admin_graphql_api_id);
+        if (onHand !== null) newQuantity = onHand;
+      } catch (err) {
+        console.error("Error obteniendo on_hand, usando available", err);
+      }
+    }
+
+    const enrichedPayload = { ...payload, new_quantity: newQuantity };
+    const webhook = await prisma.webhookQueue.create({
+      data: {
+        id: uuidv4(),
+        shop,
+        topic: normalizedTopic,
+        payload: JSON.stringify(enrichedPayload),
+        status: 'pending'
+      }
+    });
+
+    try {
+      await processWebhookQueue(webhook.id);
+      const processedWebhook = await prisma.webhookQueue.findUnique({ where: { id: webhook.id } });
+      if (!processedWebhook) {
+        return new Response(JSON.stringify({
+          status: "completed",
+          topic: normalizedTopic,
+          timestamp: new Date().toISOString(),
+          webhookId: webhook.id
+        }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        status: processedWebhook.status,
+        topic: normalizedTopic,
+        timestamp: new Date().toISOString(),
+        webhookId: webhook.id
+      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+    } catch (error) {
+      const existingWebhook = await prisma.webhookQueue.findUnique({ where: { id: webhook.id } });
+      if (existingWebhook) {
+        const isShipeu404 = error.message?.includes('Shipeu sync failed: 404');
+        if (isShipeu404) {
+          await prisma.webhookQueue.delete({ where: { id: webhook.id } });
+          return new Response(JSON.stringify({
+            status: "ignored",
+            reason: "shipeu_404",
+            error: error.message,
+            timestamp: new Date().toISOString()
+          }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        const attempts = existingWebhook.attempts + 1;
+        await prisma.webhookQueue.update({
+          where: { id: webhook.id },
+          data: {
+            status: attempts >= 3 ? 'failed' : 'error',
+            attempts,
+            error: JSON.stringify({
+              message: error.message,
+              stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+              timestamp: new Date().toISOString()
+            }),
+            processedAt: new Date()
+          }
+        });
+        if (attempts < 3) {
+          processWebhookQueue().catch(console.error);
+        }
+      }
+      return new Response(JSON.stringify({
+        status: "error",
+        error: error.message,
+        webhookId: webhook.id,
+        timestamp: new Date().toISOString()
+      }, null, 2), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
+  } catch (error) {
+    return new Response(JSON.stringify({
+      status: "error",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      timestamp: new Date().toISOString()
+    }, null, 2), { status: 500, headers: { "Content-Type": "application/json" } });
+  }
+};
