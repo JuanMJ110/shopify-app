@@ -89,13 +89,13 @@ export async function action({ request }) {
     const inventoryItemId = variants[0].node.inventoryItem.id;
 
     // Verificar si el stock actual es igual al que queremos establecer
-    if (onHandQuantity === quantityInt) {
+    if (onHandQuantity === q) {
       return json({ 
         success: true,
         message: "Stock already updated",
         data: {
           sku,
-          quantity: quantityInt,
+          quantity: q,
           currentStock: onHandQuantity,
           quantities,
           locationId: session.shipeuLocationId,
@@ -132,7 +132,7 @@ export async function action({ request }) {
             quantities: [{
               inventoryItemId: variant.inventoryItem.id,
               locationId: session.shipeuLocationId,
-              quantity: quantityInt
+              quantity: q
             }]
           }
         }
