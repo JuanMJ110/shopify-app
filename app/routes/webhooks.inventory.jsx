@@ -58,7 +58,7 @@ async function obtenerExistenciaOnHand(existingSession, adminGraphqlApiId) {
   });
   if (!response.ok) throw new Error(`Error Shopify response: ${response.statusText}`);
   const result = await response.json();
-  return result?.data?.inventoryLevel?.quantities?.quantity ?? null;
+  return result?.data?.inventoryLevel?.quantities?.[0]?.quantity ?? null;
 }
 
 async function syncWithShipeu({ sellerId, operation, data }) {
