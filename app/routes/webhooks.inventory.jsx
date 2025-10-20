@@ -35,7 +35,8 @@ function formatInventoryItemGid(id) {
 
 // Consulta on_hand usando admin_graphql_api_id, limpiando parámetros
 async function obtenerExistenciaOnHand(existingSession, adminGraphqlApiId) {
-  const gid = adminGraphqlApiId.split('?')[0];
+  // const gid = adminGraphqlApiId.split('?')[0];
+  const gid = adminGraphqlApiId;
   const url = `https://${existingSession.shop}/admin/api/2024-10/graphql.json`;
   const queryBody = {
     query: `query {
