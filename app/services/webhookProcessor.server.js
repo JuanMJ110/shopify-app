@@ -244,7 +244,7 @@ async function determineOperation(topic, payload, admin) {
 }
 
 async function handleInventoryLevelsUpdate(payload, admin) {
-  const { inventory_item_id, available, location_id } = payload;
+  const { inventory_item_id, new_quantity, location_id } = payload;
   
   const itemDetails = await getInventoryItemDetails(admin, inventory_item_id);
   
@@ -256,7 +256,7 @@ async function handleInventoryLevelsUpdate(payload, admin) {
     operation: 'update_quantity',
     data: {
       sku: itemDetails.sku,
-      new_quantity: available,
+      new_quantity: new_quantity,
       product_title: itemDetails.variant?.product?.title,
       variant_title: itemDetails.variant?.title,
       price: itemDetails.variant?.price,
