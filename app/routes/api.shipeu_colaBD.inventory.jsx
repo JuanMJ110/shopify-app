@@ -24,43 +24,87 @@ export async function action({ request }) {
     const shopifyDomain = `https://${session.shop}`;
     const queryUrl = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
 
-    const searchQuery = `
-      query searchVariant($locationId: ID!) {
-        productVariants(first: 1, query: "sku:\"${sku}\"") {
+    // Autenticar con admin usando las credenciales de la sesión
+    const admin = {
+      graphql: async (query, options = {}) => {
+        const shopifyDomain = `https://${session.shop}`;
+        const url = `${shopifyDomain}/admin/api/2024-10/graphql.json`;
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': session.accessToken
+          },
+          body: JSON.stringify({
+            query,
+            variables: options.variables
+          })
+        });
+
+        return response;
+      }
+    };
+
+    // 1. Buscar el producto por SKU y obtener su stock actual
+    const searchResponse = await admin.graphql(
+      `query searchVariant($locationId: ID!) {
+        productVariants(first: 1, query: "sku:${sku}") {
           edges {
             node {
               id
               sku
               inventoryItem {
                 id
+                inventoryLevel(locationId: $locationId) {
+                  id
+                  quantities(names: ["available", "incoming", "committed", "damaged", "on_hand", "quality_control", "reserved", "safety_stock"]) {
+                    name
+                    quantity
+                  }
+                  location {
+                    id
+                  }
+                }
               }
             }
           }
         }
-      }`;
+      }`,
+      {
+        variables: {
+          locationId: session.shipeuLocationId
+        }
+      }
+    );
 
-    const searchResp = await fetch(queryUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": session.accessToken,
-      },
-      body: JSON.stringify({
-        query: searchQuery,
-        variables: { locationId: session.shipeuLocationId },
-      }),
-    });
-
-    const searchData = await searchResp.json();
+    const searchData = await searchResponse.json();
     const variants = searchData?.data?.productVariants?.edges || [];
     if (variants.length === 0)
       return json({ error: "SKU not found in Shopify" }, { status: 404 });
 
     const inventoryItemId = variants[0].node.inventoryItem.id;
 
-    // --- 2. Actualizar inventario en Shopify ---
-    const mutation = `
-      mutation InventorySet($input: InventorySetQuantitiesInput!) {
+    // Verificar si el stock actual es igual al que queremos establecer
+    if (onHandQuantity === quantityInt) {
+      return json({ 
+        success: true,
+        message: "Stock already updated",
+        data: {
+          sku,
+          quantity: quantityInt,
+          currentStock: onHandQuantity,
+          quantities,
+          locationId: session.shipeuLocationId,
+          skipped: true,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+
+    // 2. Actualizar el inventario en Shopify
+    const updateResponse = await admin.graphql(
+      `mutation InventorySet($input: InventorySetQuantitiesInput!) {
         inventorySetQuantities(input: $input) {
           inventoryAdjustmentGroup {
             createdAt
@@ -75,34 +119,24 @@ export async function action({ request }) {
             message
           }
         }
-      }`;
-
-    const updateResp = await fetch(queryUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": session.accessToken,
-      },
-      body: JSON.stringify({
-        query: mutation,
+      }`,
+      {
         variables: {
           input: {
             name: "available",
             reason: "correction",
             ignoreCompareQuantity: true,
-            quantities: [
-              {
-                inventoryItemId,
-                locationId: session.shipeuLocationId,
-                quantity: q,
-              },
-            ],
-          },
-        },
-      }),
-    });
+            quantities: [{
+              inventoryItemId: variant.inventoryItem.id,
+              locationId: session.shipeuLocationId,
+              quantity: quantityInt
+            }]
+          }
+        }
+      }
+    );
 
-    const updateData = await updateResp.json();
+    const updateData = await updateResponse.json();
     const userErrors = updateData.data?.inventorySetQuantities?.userErrors;
     if (userErrors?.length > 0)
       return json({ error: "Shopify error", details: userErrors }, { status: 400 });
