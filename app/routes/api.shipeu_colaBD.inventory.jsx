@@ -26,7 +26,7 @@ export async function action({ request }) {
 
     const searchQuery = `
       query searchVariant($locationId: ID!) {
-        productVariants(first: 1, query: "sku:${sku}") {
+        productVariants(first: 1, query: "sku:\"${sku}\"") {
           edges {
             node {
               id
